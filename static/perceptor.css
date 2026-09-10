@@ -1,0 +1,111 @@
+:root {
+    --bg:#080908; --panel:#0c0e0c; --hi:#101310;
+    --stroke:#243520; --stroke-hi:#405a3a;
+    --nw:#b8ffd0; --yl:#e8c000; --rd:#ff2800; --bl:#0077C8; --amb:#FFB300;
+    --dim:#618a6b; --faint:#2e4432;
+    --mono: 'B612 Mono', 'SF Mono', Menlo, Consolas, monospace;
+  }
+  .editor-doc { background: var(--bg); color: var(--nw); font-family: var(--mono);
+                max-width: 1080px; margin: 2rem auto; padding: 0 1rem; }
+  .editor-doc h1 { font-size: 18px; font-weight: 700; letter-spacing: .04em; margin-bottom: 2px; }
+  .sub { color: var(--dim); font-size: 12px; margin-bottom: 1.2rem; }
+  .editor-doc h2 { font-size: 13px; font-weight: 700; margin: 1.5rem 0 10px;
+       color: var(--faint); text-transform: uppercase; letter-spacing: .12em;
+       border-bottom: 1px solid var(--stroke); padding-bottom: 5px; }
+  .editor-doc .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 20px; margin-bottom: 1rem; }
+  .field label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 3px; }
+  .editor-doc input, .editor-doc select, .editor-doc textarea {
+    width: 100%; padding: 5px 7px; font-size: 13px; box-sizing: border-box;
+    background: var(--panel); border: 1px solid var(--stroke-hi); border-radius: 2px;
+    color: var(--nw); font-family: var(--mono);
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--bl); }
+  .pt-card { border: 1px solid var(--stroke-hi); border-radius: 3px; padding: 10px; margin-bottom: 10px; }
+  .lock-tag { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+  input:disabled, textarea:disabled, select:disabled {
+    opacity: .55; cursor: not-allowed;
+  }
+  .pt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .pt-head input.seq { width: 60px; text-align: center; font-weight: 700; color: var(--bl); }
+  .pt-head .pt-btns { margin-left: auto; display: flex; gap: 4px; }
+  .pt-main { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .pt-main textarea { min-height: 44px; resize: vertical; }
+  .pt-sign { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .pt-sign label { display: block; font-size: 10px; color: var(--dim); margin-bottom: 2px; }
+  .pt-sign .time-row { display: flex; gap: 4px; }
+  .pt-main label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 3px; }
+  /* Flag: NVG amber instead of the usual blue, on the point number and
+     whichever sign-off fields are currently active -- independent of
+     locked, which is why this only ever touches .pt-sign (the fields
+     that stay editable on a locked point too). */
+  .pt-card.flagged .pt-head input.seq { color: var(--amb); }
+  .pt-card.flagged .pt-sign input:focus, .pt-card.flagged .pt-sign select:focus,
+  .pt-card.flagged .pt-main textarea:focus { border-color: var(--amb); }
+  .pt-card.flagged .pt-sign .time-row .btn:hover,
+  .pt-card.flagged .pt-sign .time-row .btn:focus { border-color: var(--amb); color: var(--amb); }
+  .flag-btn.flagged { color: var(--amb); border-color: var(--amb); }
+  .pt-camera:empty { display: none; }
+  .cam-preview { width: 100%; max-width: 320px; border: 1px solid var(--stroke-hi); border-radius: 3px;
+                 margin-top: 8px; display: block; }
+  .pt-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .pt-images:empty { margin-top: 0; }
+  .thumb-chip { font-size: 11px; color: var(--dim); background: var(--panel);
+                border: 1px solid var(--stroke-hi); border-radius: 2px; padding: 2px 6px;
+                display: inline-flex; align-items: center; gap: 6px; }
+  .thumb-chip .btn.mini { padding: 0 4px; }
+  .pt-cam-msg { font-size: 11px; color: var(--amb); margin-top: 4px; }
+  .pt-cam-msg:empty { display: none; }
+  .btn { background: var(--panel); border: 1px solid var(--stroke-hi); color: var(--nw);
+         font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 2px;
+         cursor: pointer; text-transform: uppercase; }
+  .btn:hover { border-color: var(--bl); color: var(--bl); }
+  .btn.mini { padding: 1px 6px; font-size: 12px; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn:disabled:hover { border-color: var(--stroke-hi); color: var(--nw); }
+  /* NVG amber, matching the author's WINDBLADE cockpit palette. Generic
+     styling at rest; color only shows on hover/active, no constant glow.
+     The heading stays the normal section-header color -- only the
+     warning entries' own text is amber. */
+  #addWarningBtn:hover, #addWarningBtn:active { border-color: var(--amb); color: var(--amb); }
+  #warningsList textarea { color: var(--amb); }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .list-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: flex-start; }
+  .list-row textarea { flex: 1; min-height: 34px; resize: vertical; }
+  .nomtable { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 12px; }
+  .nomtable td, .nomtable th { border: 1px solid var(--stroke); padding: 4px 7px; }
+  .nomtable th.blank-th { border: none; background: transparent; }
+  /* A heading immediately followed by a table (Nomenclature, References)
+     doesn't need its own rule line -- the table's own border already
+     separates it from what's above. Headings before free text (Notes,
+     Warnings) keep the rule line. */
+  /* Headings that precede repeatable, self-bordered content (a table, or
+     a list of row-cards like Test Points/Notes/Warnings) don't need their
+     own rule line -- that content already provides visual separation.
+     Card metadata and Save/load/export keep theirs. */
+  h2.no-rule { border-bottom: none; padding-bottom: 0; }
+  .hint { color: var(--dim); font-size: 11px; margin-bottom: 10px; }
+
+/* ── Print / PDF card (export_print_html) ──────────────────────────────
+   A separate document from the editor above (opened in its own window),
+   scoped under .print-doc on <body> so it can share this file with the
+   editor CSS without any of the editor's rules (especially .meta, which
+   means something completely different here) leaking across. */
+.print-doc { font-family: 'B612', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        color: #1a1a1a; max-width: 1100px; margin: 1in auto; }
+.print-doc h1 { font-size: 30pt; font-weight: 600; color: #3c5a76; margin-bottom: 4px; }
+.print-doc .meta { font-size: 16pt; color: #444; margin-bottom: 4px; }
+.print-doc .meta:last-of-type { margin-bottom: 20px; }
+.print-doc .meta span { margin-right: 18px; }
+.print-doc table { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 9.5pt; }
+.print-doc th, .print-doc td { border: 1px solid #d5dde3; padding: 8px 10px; text-align: left; vertical-align: top; }
+.print-doc th { background: #e7eef5; font-weight: 700; color: #1a1a1a; }
+.print-doc table.test-points { table-layout: fixed; font-size: 8.5pt; }
+.print-doc table.test-points th, .print-doc table.test-points td {
+  padding: 6px 6px; word-wrap: break-word; overflow-wrap: break-word;
+}
+.print-doc h2 { font-size: 13pt; font-weight: 600; color: #3c5a76; margin: 0 0 8px; }
+.print-doc .note-bar { background: #e7eef5; border-radius: 4px; padding: 8px 12px;
+             margin-bottom: 6px; font-size: 9.5pt; }
+.print-doc .warn-bar { background: #f8d7d7; color: #7a1f1f; border-radius: 4px; padding: 8px 12px;
+             margin-bottom: 6px; font-size: 9.5pt; }
+@media print { .print-doc { margin: 0.4in; } }
