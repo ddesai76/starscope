@@ -48,8 +48,10 @@
   table.datatable th.blank-th { border: none; background: transparent; }
   .tests-format { table-layout: fixed; }
   .tests-format td { overflow: hidden; text-overflow: ellipsis; }
-  .tests-format td.actions-cell { white-space: nowrap; overflow: visible; }
-  .tests-format td.actions-cell .btn:not(.mini) { padding: 6px 22px; margin-right: 6px; min-width: 60px; }
+  .tests-format td.actions-cell { white-space: nowrap; overflow: visible; text-align: right; }
+  .tests-format td.actions-cell .btn:not(.mini) { padding: 6px 22px; min-width: 60px; }
+  .tests-format td.actions-cell .btn:not(.mini) + .btn:not(.mini) { margin-left: 6px; }
+  .tests-format td.author-cell { color: var(--dim); font-size: 12px; }
   /* NVG accent colors, matching the author's WINDBLADE cockpit palette --
      green for the affirmative action, red for the destructive one. Generic
      styling at rest; the color only shows on hover/active, not as a
