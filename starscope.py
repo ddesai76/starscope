@@ -45,7 +45,7 @@ import sys
 import threading
 import webbrowser
 from dataclasses import dataclass, field, asdict
-from datetime import date
+from datetime import date, datetime
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -67,6 +67,12 @@ class CampaignTestRow:
     test_id: str = ""
     title: str = ""
     status: str = ""   # "", COMPLETE, IN_PROGRESS, TO_DO, BLOCKED
+    # Pulled from the linked .test file's own Author metadata, not typed
+    # here directly -- kept in sync opportunistically (whenever the row's
+    # Test ID is added/changed and a matching file exists), same "best
+    # effort, no error if it doesn't match yet" spirit as everything else
+    # in this file's traceability.
+    author: str = ""
 
 
 @dataclass
@@ -117,6 +123,71 @@ def test_filename(test_id: str) -> str:
     return perceptor._safe_filename(test_id, ".test")
 
 
+def vcrm_filename(campaign_id: str) -> str:
+    return perceptor._safe_filename(campaign_id, ".vcrm")
+
+
+def compute_vcrm(camp: Campaign) -> dict:
+    """Verification Cross-Reference Matrix: requirement -> which Test
+    Series tests verify it -> rolled-up coverage. Read-only and computed
+    fresh each time from data that already exists elsewhere (the
+    campaign's Requirements table, and each referenced test's own
+    `requirements` field) -- nothing new to keep in sync, same "manual,
+    not enforced" traceability philosophy as the rest of the app: a typo
+    in either place just means no link shows up, silently, no validation.
+
+    Ancillary Tests are deliberately excluded -- they're invoked FROM a
+    Test Series test (a performance check, etc.), not an independent
+    verification of a requirement in their own right.
+    """
+    test_cache: dict = {}
+
+    def get_test(test_id: str):
+        if test_id not in test_cache:
+            path = os.path.join(os.getcwd(), test_filename(test_id))
+            card = None
+            if os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        card = perceptor.TestCard.from_dict(json.loads(f.read()))
+                except (OSError, json.JSONDecodeError, TypeError):
+                    card = None
+            test_cache[test_id] = card
+        return test_cache[test_id]
+
+    rows = []
+    for req_code, req_desc in camp.requirements:
+        req_code = (req_code or "").strip()
+        if not req_code:
+            continue
+        covering = []
+        for t in camp.tests:
+            card = get_test(t.test_id)
+            if not card:
+                continue
+            tokens = [tok.strip() for tok in (card.requirements or "").split(",")]
+            if req_code in tokens:
+                covering.append({"test_id": t.test_id, "title": t.title, "status": t.status})
+        if not covering:
+            coverage = "Not Covered"
+        elif all(c["status"] == "COMPLETE" for c in covering):
+            coverage = "Covered"
+        elif any(c["status"] == "COMPLETE" for c in covering):
+            coverage = "Partial"
+        else:
+            coverage = "Planned"
+        rows.append({"requirement": req_code, "description": req_desc,
+                      "covering_tests": covering, "coverage": coverage})
+
+    return {
+        "campaign_id": camp.id, "campaign_title": camp.title,
+        # No 'T' separator, no seconds -- this is shown to a human as
+        # "when was this generated", not parsed back programmatically.
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "rows": rows,
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Export: print-ready HTML (same visual system as Perceptor's test card)
 # ══════════════════════════════════════════════════════════════════════
@@ -131,18 +202,18 @@ def export_campaign_print_html(camp: Campaign, host: str = "localhost") -> str:
 </table>
 """
     test_rows = "\n".join(
-        f"<tr><td>{t.seq}</td><td>{h(t.test_id)}</td><td>{h(t.title)}</td>"
+        f"<tr><td>{t.seq}</td><td>{h(t.test_id)}</td><td>{h(t.title)}</td><td>{h(t.author)}</td>"
         f"<td>{h(STATUS_LABELS.get(t.status, t.status))}</td></tr>"
         for t in camp.tests
     )
     anc_rows = "\n".join(
-        f"<tr><td>{t.seq}</td><td>{h(t.test_id)}</td><td>{h(t.title)}</td>"
+        f"<tr><td>{t.seq}</td><td>{h(t.test_id)}</td><td>{h(t.title)}</td><td>{h(t.author)}</td>"
         f"<td>{h(STATUS_LABELS.get(t.status, t.status))}</td></tr>"
         for t in camp.ancillary_tests
     )
     anc_section = "" if not camp.ancillary_tests else f"""<h2>Ancillary Tests</h2>
 <table>
-<tr><th style="width:6%">#</th><th style="width:18%">Test ID</th><th>Title</th><th style="width:16%">Status</th></tr>
+<tr><th style="width:6%">#</th><th style="width:16%">Test ID</th><th>Title</th><th style="width:16%">Author</th><th style="width:14%">Status</th></tr>
 {anc_rows}
 </table>
 """
@@ -173,10 +244,41 @@ def export_campaign_print_html(camp: Campaign, host: str = "localhost") -> str:
 </div>
 {req_section}<h2>Test Series</h2>
 <table>
-<tr><th style="width:6%">#</th><th style="width:18%">Test ID</th><th>Title</th><th style="width:16%">Status</th></tr>
+<tr><th style="width:6%">#</th><th style="width:16%">Test ID</th><th>Title</th><th style="width:16%">Author</th><th style="width:14%">Status</th></tr>
 {test_rows}
 </table>
 {anc_section}{sections_html}
+<script>window.onload = () => window.print();</script>
+</body></html>"""
+
+
+def export_vcrm_print_html(vcrm: dict, host: str = "localhost") -> str:
+    h = perceptor._h
+
+    def covering_str(row):
+        if not row["covering_tests"]:
+            return "--"
+        parts = [f"{c['test_id']} ({STATUS_LABELS.get(c['status'], c['status'] or '(none)')})"
+                  for c in row["covering_tests"]]
+        return ", ".join(parts)
+
+    rows_html = "\n".join(
+        f"<tr><td>{h(r['requirement'])}</td><td>{h(r['description'])}</td>"
+        f"<td>{h(covering_str(r))}</td><td>{h(r['coverage'])}</td><td>{h(vcrm['generated'])}</td></tr>"
+        for r in vcrm["rows"]
+    )
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>{h(vcrm['campaign_id'])} VCRM -- {h(vcrm['campaign_title'])}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=B612:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="http://{host}/static/starscope.css"></head>
+<body class="print-doc">
+<h1>Verification Cross-Reference Matrix</h1>
+<table>
+<tr><th style="width:14%">Requirement</th><th>Description</th><th style="width:24%">Covering Tests</th><th style="width:10%">Coverage</th><th style="width:12%">Updated</th></tr>
+{rows_html}
+</table>
 <script>window.onload = () => window.print();</script>
 </body></html>"""
 
@@ -251,15 +353,15 @@ def export_campaign_docx(camp: Campaign) -> bytes:
 
     doc.add_heading("Test Series", level=1)
     _add_table(
-        doc, ["#", "Test ID", "Title", "Status"],
-        [(t.seq, t.test_id, t.title, STATUS_LABELS.get(t.status, t.status)) for t in camp.tests],
+        doc, ["#", "Test ID", "Title", "Author", "Status"],
+        [(t.seq, t.test_id, t.title, t.author, STATUS_LABELS.get(t.status, t.status)) for t in camp.tests],
     )
 
     if camp.ancillary_tests:
         doc.add_heading("Ancillary Tests", level=1)
         _add_table(
-            doc, ["#", "Test ID", "Title", "Status"],
-            [(t.seq, t.test_id, t.title, STATUS_LABELS.get(t.status, t.status))
+            doc, ["#", "Test ID", "Title", "Author", "Status"],
+            [(t.seq, t.test_id, t.title, t.author, STATUS_LABELS.get(t.status, t.status))
              for t in camp.ancillary_tests],
         )
 
@@ -269,6 +371,28 @@ def export_campaign_docx(camp: Campaign) -> bytes:
         doc.add_heading(header, level=1)
         for line in (text or "").split("\n"):
             doc.add_paragraph(line)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def export_vcrm_docx(vcrm: dict) -> bytes:
+    doc = Document()
+    doc.add_heading("Verification Cross-Reference Matrix", level=0)
+
+    def covering_str(row):
+        if not row["covering_tests"]:
+            return "--"
+        parts = [f"{c['test_id']} ({STATUS_LABELS.get(c['status'], c['status'] or '(none)')})"
+                  for c in row["covering_tests"]]
+        return ", ".join(parts)
+
+    _add_table(
+        doc, ["Requirement", "Description", "Covering Tests", "Coverage", "Updated"],
+        [(r["requirement"], r["description"], covering_str(r), r["coverage"], vcrm["generated"])
+         for r in vcrm["rows"]],
+    )
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -370,10 +494,10 @@ _CAMPAIGN_HTML = """<!doctype html>
     <h2 class="no-rule">Test Series</h2>
     <table class="datatable tests-format" id="testsTable">
       <colgroup>
-      <col style="width:6%"><col style="width:16%"><col style="width:34%">
-      <col style="width:14%"><col style="width:30%">
+      <col style="width:5%"><col style="width:13%"><col style="width:24%">
+      <col style="width:16%"><col style="width:12%"><col style="width:30%">
       </colgroup>
-      <tr><th>#</th><th>Test ID</th><th>Title</th><th>Status</th><th class="blank-th"></th></tr>
+      <tr><th>#</th><th>Test ID</th><th>Title</th><th>Author</th><th>Status</th><th class="blank-th"></th></tr>
     </table>
     <div class="row"><button class="btn" id="addTestBtn">+ add test</button></div>
     <div class="row">
@@ -385,10 +509,10 @@ _CAMPAIGN_HTML = """<!doctype html>
     <h2 class="no-rule">Ancillary Tests</h2>
     <table class="datatable tests-format" id="ancTestsTable">
       <colgroup>
-      <col style="width:6%"><col style="width:16%"><col style="width:34%">
-      <col style="width:14%"><col style="width:30%">
+      <col style="width:5%"><col style="width:13%"><col style="width:24%">
+      <col style="width:16%"><col style="width:12%"><col style="width:30%">
       </colgroup>
-      <tr><th>#</th><th>Test ID</th><th>Title</th><th>Status</th><th class="blank-th"></th></tr>
+      <tr><th>#</th><th>Test ID</th><th>Title</th><th>Author</th><th>Status</th><th class="blank-th"></th></tr>
     </table>
     <div class="row"><button class="btn" id="addAncTestBtn">+ add test</button></div>
     <div class="row">
@@ -408,6 +532,7 @@ _CAMPAIGN_HTML = """<!doctype html>
       <button class="btn" id="saveCampBtn">export campaign file (.camp)</button>
       <button class="btn" id="printCampBtn">generate .pdf</button>
       <button class="btn" id="docxCampBtn">export .docx</button>
+      <button class="btn" id="genVcrmBtn">generate VCRM</button>
     </div>
     <div id="saveStatus"></div>
   </div>
@@ -472,6 +597,11 @@ const STATUS_OPTIONS = [
   ["TO_DO", "\U0001F7E0 TO DO"],
   ["BLOCKED", "\U0001F534 BLOCKED"],
 ];
+// Plain-text labels (no colored dot -- that's UI-only, never shown in the
+// VCRM or any export), matching STATUS_LABELS in starscope.py.
+const STATUS_LABELS = {
+  COMPLETE: "COMPLETE", IN_PROGRESS: "IN PROGRESS", TO_DO: "TO DO", BLOCKED: "BLOCKED",
+};
 function statusSelect(i, current) {
   const opts = STATUS_OPTIONS.map(([v, label]) =>
     `<option value="${v}"${v === current ? " selected" : ""}>${label}</option>`).join("");
@@ -492,7 +622,8 @@ function renderTestsTable(list, tableId) {
     tr.innerHTML = `
       <td><input value="${esc(row.seq)}" data-i="${i}" data-f="seq"></td>
       <td><input value="${esc(row.test_id)}" data-i="${i}" data-f="test_id" placeholder="TC-001"></td>
-      <td><input value="${esc(row.title)}" data-i="${i}" data-f="title"></td>
+      <td class="meta-cell">${esc(row.title || "")}</td>
+      <td class="meta-cell">${esc(row.author || "")}</td>
       <td>${statusSelect(i, row.status)}</td>
       <td class="actions-cell">
         <button class="btn" data-open="${i}">open</button>
@@ -503,6 +634,13 @@ function renderTestsTable(list, tableId) {
   t.querySelectorAll("input[data-f], select[data-f]").forEach(el => {
     const ev = el.tagName === "SELECT" ? "change" : "input";
     el.addEventListener(ev, () => { list[+el.dataset.i][el.dataset.f] = el.value; });
+  });
+  // Title and Author are both pulled from the linked .test file, not typed
+  // here -- refresh them once someone's done editing a Test ID (blur, not
+  // every keystroke, so a re-render doesn't yank focus out from under them
+  // mid-type).
+  t.querySelectorAll('input[data-f="test_id"]').forEach(el => {
+    el.addEventListener("blur", () => backfillMetadataForRow(list, tableId, +el.dataset.i));
   });
   t.querySelectorAll("button[data-del]").forEach(btn => {
     btn.addEventListener("click", () => { list.splice(+btn.dataset.del, 1); renderTestsTable(list, tableId); });
@@ -517,12 +655,30 @@ function renderTestsTable(list, tableId) {
 function renderTests() { renderTestsTable(camp.tests, "testsTable"); }
 function renderAncillaryTests() { renderTestsTable(camp.ancillary_tests, "ancTestsTable"); }
 
+async function backfillMetadataForRow(list, tableId, i) {
+  const row = list[i];
+  const testId = (row.test_id || "").trim();
+  if (!testId) return;
+  const filename = testId.replace(/[^A-Za-z0-9._-]/g, "_") + ".test";
+  try {
+    const res = await fetch("/load?file=" + encodeURIComponent(filename));
+    if (!res.ok) return;   // no matching file yet -- leave title/author as-is, silently
+    const data = await res.json();
+    row.title = data.title || "";
+    row.author = data.author || "";
+    renderTestsTable(list, tableId);
+  } catch (err) {
+    // transient error -- same "silent, no validation" spirit as the rest
+    // of this traceability; nothing here is load-bearing.
+  }
+}
+
 document.getElementById("addTestBtn").addEventListener("click", () => {
-  camp.tests.push({seq: nextSeqFor(camp.tests), test_id: "", title: "", status: ""});
+  camp.tests.push({seq: nextSeqFor(camp.tests), test_id: "", title: "", author: "", status: ""});
   renderTests();
 });
 document.getElementById("addAncTestBtn").addEventListener("click", () => {
-  camp.ancillary_tests.push({seq: nextSeqFor(camp.ancillary_tests), test_id: "", title: "", status: ""});
+  camp.ancillary_tests.push({seq: nextSeqFor(camp.ancillary_tests), test_id: "", title: "", author: "", status: ""});
   renderAncillaryTests();
 });
 
@@ -554,15 +710,15 @@ async function addBrowsedFile(selectId, list, tableId, statusId) {
     status.textContent = `${testId} is already in this table.`;
     return;
   }
-  // Grab the title too, if we can -- an empty-Title row for every file
-  // someone browses in isn't very useful. Not fatal if this fails, the
-  // row still gets added with a blank title to fill in by hand.
-  let title = "";
+  // Grab the title and author too, if we can -- an empty row for every
+  // file someone browses in isn't very useful. Not fatal if this fails,
+  // the row still gets added with those left blank to fill in by hand.
+  let title = "", author = "";
   try {
     const res = await fetch("/load?file=" + encodeURIComponent(filename));
-    if (res.ok) { const data = await res.json(); title = data.title || ""; }
-  } catch (err) { /* leave title blank */ }
-  list.push({seq: nextSeqFor(list), test_id: testId, title: title, status: ""});
+    if (res.ok) { const data = await res.json(); title = data.title || ""; author = data.author || ""; }
+  } catch (err) { /* leave title/author blank */ }
+  list.push({seq: nextSeqFor(list), test_id: testId, title: title, author: author, status: ""});
   renderTestsTable(list, tableId);
 }
 document.getElementById("browseTestFiles").addEventListener("focus", () => refreshFileList("browseTestFiles"));
@@ -766,8 +922,105 @@ function closeTestTab(key) {
   else renderTabBar();
 }
 
+// ---- VCRM (Verification Cross-Reference Matrix) ----
+// A single reserved tab, regenerated in place rather than duplicated on
+// repeat clicks -- "__vcrm__" can't collide with a real .test filename,
+// which always ends in .test. Read-only: this tab shows a computed
+// snapshot, not something edited in the UI.
+const VCRM_KEY = "__vcrm__";
+let currentVcrm = null;
+
+function vcrmCoveringStr(row) {
+  if (!row.covering_tests.length) return "--";
+  return row.covering_tests.map(c => `${c.test_id} (${STATUS_LABELS[c.status] || c.status || "(none)"})`).join(", ");
+}
+
+async function generateVcrm() {
+  const status = document.getElementById("saveStatus");
+  try {
+    const res = await fetch("/vcrm", {method: "POST", body: JSON.stringify(camp)});
+    if (!res.ok) throw new Error(`server returned ${res.status}`);
+    currentVcrm = await res.json();
+  } catch (err) {
+    status.textContent = `VCRM generation failed: ${err}`;
+    return;
+  }
+
+  if (!openTabs.some(t => t.key === VCRM_KEY)) {
+    openTabs.push({key: VCRM_KEY, label: "VCRM"});
+  }
+  let panel = document.getElementById("panel-" + VCRM_KEY);
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.className = "panel";
+    panel.id = "panel-" + VCRM_KEY;
+    document.getElementById("panels").appendChild(panel);
+  }
+  const rows = currentVcrm.rows.map(r => `
+    <tr>
+      <td>${esc(r.requirement)}</td>
+      <td>${esc(r.description)}</td>
+      <td>${esc(vcrmCoveringStr(r))}</td>
+      <td>${esc(r.coverage)}</td>
+      <td>${esc(currentVcrm.generated)}</td>
+    </tr>`).join("");
+  panel.innerHTML = `
+    <h1 style="visibility:hidden">STARSCOPE</h1>
+    <div class="sub" style="visibility:hidden">Test Campaign Designer</div>
+    <h2 class="no-rule">Verification Cross-Reference Matrix</h2>
+    <table class="datatable">
+      <tr><th>Requirement</th><th>Description</th><th>Covering Tests</th><th>Status</th><th>Updated</th></tr>
+      ${rows || '<tr><td colspan="5">No requirements entered on this campaign yet.</td></tr>'}
+    </table>
+    <div class="row">
+      <button class="btn" id="saveVcrmBtn">export .vcrm file</button>
+      <button class="btn" id="printVcrmBtn">generate .pdf</button>
+      <button class="btn" id="docxVcrmBtn">export .docx</button>
+    </div>
+    <div id="vcrmStatus" class="hint"></div>`;
+
+  const vcrmStatus = panel.querySelector("#vcrmStatus");
+  panel.querySelector("#saveVcrmBtn").addEventListener("click", async () => {
+    try {
+      const res = await fetch("/save_vcrm", {method: "POST", body: JSON.stringify(currentVcrm)});
+      const data = await res.json();
+      vcrmStatus.textContent = data.saved ? `Saved to ${data.path}` : `Save failed: ${data.error || "unknown error"}`;
+    } catch (err) {
+      vcrmStatus.textContent = `Save failed: ${err}`;
+    }
+  });
+  panel.querySelector("#printVcrmBtn").addEventListener("click", async () => {
+    // Open synchronously, before the await below -- see the same note on
+    // printCampBtn above for why.
+    const w = window.open("", "_blank");
+    if (w) w.document.write("Generating...");
+    try {
+      const res = await fetch("/export/vcrm/print", {method: "POST", body: JSON.stringify(currentVcrm)});
+      if (!res.ok) throw new Error(`server returned ${res.status}`);
+      const text = await res.text();
+      if (w) { w.document.open(); w.document.write(text); w.document.close(); }
+    } catch (err) {
+      if (w) { w.document.open(); w.document.write("Failed to generate: " + err); w.document.close(); }
+      vcrmStatus.textContent = `Print failed: ${err}`;
+    }
+  });
+  panel.querySelector("#docxVcrmBtn").addEventListener("click", async () => {
+    try {
+      const res = await fetch("/export/vcrm/docx", {method: "POST", body: JSON.stringify(currentVcrm)});
+      if (!res.ok) throw new Error(`server returned ${res.status}`);
+      const blob = await res.blob();
+      download((currentVcrm.campaign_id || "vcrm") + ".docx", blob);
+    } catch (err) {
+      vcrmStatus.textContent = `Docx export failed: ${err}`;
+    }
+  });
+
+  switchTab(VCRM_KEY);
+}
+document.getElementById("genVcrmBtn").addEventListener("click", generateVcrm);
+
 bindMeta();
-camp.tests = [{seq: 1, test_id: "", title: "", status: ""}];
+camp.tests = [{seq: 1, test_id: "", title: "", author: "", status: ""}];
 renderRequirements();
 renderTests();
 renderAncillaryTests();
@@ -848,6 +1101,46 @@ class _Handler(perceptor._Handler):
                 self._send_json(400, {"error": str(e)})
                 return
             self._send(200, _DOCX_MIME, export_test_docx(card))
+        elif path == "/vcrm":
+            try:
+                camp = self._read_campaign()
+            except (json.JSONDecodeError, TypeError) as e:
+                self._send_json(400, {"error": str(e)})
+                return
+            self._send_json(200, compute_vcrm(camp))
+        elif path == "/save_vcrm":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                vcrm = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError as e:
+                self._send_json(400, {"error": str(e)})
+                return
+            filename = vcrm_filename(vcrm.get("campaign_id", "VCRM"))
+            out_path = os.path.join(os.getcwd(), filename)
+            try:
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json.dump(vcrm, f, indent=2)
+            except OSError as e:
+                self._send_json(500, {"saved": False, "error": str(e)})
+                return
+            self._send_json(200, {"saved": True, "filename": filename, "path": out_path})
+        elif path == "/export/vcrm/print":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                vcrm = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError as e:
+                self._send_json(400, {"error": str(e)})
+                return
+            self._send(200, "text/html",
+                       export_vcrm_print_html(vcrm, self.headers.get("Host", "localhost")).encode())
+        elif path == "/export/vcrm/docx":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                vcrm = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError as e:
+                self._send_json(400, {"error": str(e)})
+                return
+            self._send(200, _DOCX_MIME, export_vcrm_docx(vcrm))
         else:
             # /save, /export/csv, /export/print for test tabs.
             super().do_POST()
