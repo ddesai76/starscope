@@ -16,11 +16,11 @@
   .field label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 3px; }
   .editor-doc input, .editor-doc select, .editor-doc textarea {
     width: 100%; padding: 5px 7px; font-size: 13px; box-sizing: border-box;
-    background: var(--panel); border: 1px solid var(--stroke-hi); border-radius: 1px;
+    background: var(--panel); border: 1px solid var(--stroke-hi); border-radius: 6px;
     color: var(--nw); font-family: var(--mono);
   }
   input:focus, select:focus, textarea:focus { outline: none; border-color: var(--bl); }
-  .pt-card { border: 1px solid var(--stroke-hi); border-radius: 2px; padding: 10px; margin-bottom: 10px; }
+  .pt-card { border: 1px solid var(--stroke-hi); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
   .lock-tag { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
   input:disabled, textarea:disabled, select:disabled {
     opacity: .55; cursor: not-allowed;
@@ -52,19 +52,19 @@
     border-color: var(--nvg); color: var(--nvg);
   }
   .pt-camera:empty { display: none; }
-  .cam-preview { width: 100%; max-width: 320px; border: 1px solid var(--stroke-hi); border-radius: 2px;
+  .cam-preview { width: 100%; max-width: 320px; border: 1px solid var(--stroke-hi); border-radius: 8px;
                  margin-top: 8px; display: block; }
   .pt-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .pt-images:empty { margin-top: 0; }
   .thumb-chip { font-size: 11px; color: var(--dim); background: var(--panel);
-                border: 1px solid var(--stroke-hi); border-radius: 1px; padding: 2px 6px;
+                border: 1px solid var(--stroke-hi); border-radius: 6px; padding: 2px 6px;
                 display: inline-flex; align-items: center; gap: 6px; }
   .thumb-chip svg { display: block; width: 12px; height: 12px; fill: currentColor; flex: none; }
   .thumb-chip .btn.mini { padding: 0 4px; }
   .pt-cam-msg { font-size: 11px; color: var(--amb); margin-top: 4px; }
   .pt-cam-msg:empty { display: none; }
   .btn { background: var(--panel); border: 1px solid var(--stroke-hi); color: var(--nw);
-         font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 1px;
+         font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 6px;
          cursor: pointer; text-transform: uppercase; }
   .btn:hover { border-color: var(--bl); color: var(--bl); }
   /* Every "x"-style delete/remove control gets red on hover, not the
