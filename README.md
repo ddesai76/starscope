@@ -27,13 +27,13 @@ python3 perceptor.py [--port <n>] [--no-browser]
 ## Core Features & Workflow
 
 ### 1. Starscope (Campaign)
-* **Metadata & Requirements:** Set campaign ID (`SC-` prefix), revision, lead, and project info. Includes a manual Requirements definition table.
+* **Metadata & Requirements:** Campaign ID, revision, lead, and project info. Includes a manual Requirements definition table.
 * **Test Series:** Numbered test list (`1, 2, 3...`). Clicking **Open** launches or creates a `.test` file in a dedicated tab.
 * **Free-form Writeup Sections:** Repeating header and raw-text blocks rendered after the test list.
 * **Verification Cross-Reference Matrix (VCRM):** Automatically cross-references campaign Requirements against individual test card `Requirement(s)` fields to generate a read-only coverage report (`Covered`, `Partial`, `Planned`, `Not Covered`). Exports to `.vcrm` (JSON), `.docx`, and PDF. Excludes ancillary tests.
 
 ### 2. Perceptor (Test Card)
-* **Card Metadata:** Project, system, test conductor, QA, date, and `Requirement(s)` mapping string (e.g., `REQ-BATT-014, REQ-BATT-021`).
+* **Card Metadata:** Project, system, test conductor, QA, date, and `Requirement(s)` mapping string (e.g., `REQ-PROP-014`).
 * **Test Points:** Incremented by 10 (`10, 20, 30...`). Tracks action, expected result, reference, responsible party (RP), date, time, initial, and sign-off status (`RFI`, `PASS`, `CAUTION`, `FAIL`).
 * **Nomenclature & References:** Supports raw LaTeX math/symbols (`\alpha`, `\Delta_max`) and cited documents.
 * **Notes & Warnings:** Free-text callout boxes rendered in blue (Notes) and red (Warnings).
@@ -44,7 +44,7 @@ python3 perceptor.py [--port <n>] [--no-browser]
 * Starscope tabs display a lock icon on locked files.
 
 ### 4. Flag, Capture & Jira Integration
-* **Flag:** Highlights a test point in NVG amber during interaction without restricting edit rights.
+* **Flag:** Highlights a test point in amber.
 * **Preview/Capture:** Captures single frames via `getUserMedia()` from connected webcams or UVC-compliant devices (e.g., thermal cameras). Saves images as local `<timestamp>.jpg` files attached as point thumbnails.
 * **Jira Ticket Creation:**
   * Requires placing `jira_ticket.py` and `jira_config.json` in the working directory.
