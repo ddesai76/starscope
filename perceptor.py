@@ -1,25 +1,13 @@
 #!/usr/bin/env python3
-#
-# perceptor.py:    Test card / test point creator (Epsilon3-lite)
-# AUTHOR:          DANIEL DESAI
-# VERSION:         0.1.0
-#
-# Single standalone file, same shape as drift.py: stdlib http.server +
-# webbrowser.open, no external JS libraries in the browser. The editor
-# state lives client-side; the server is only used for the three export
-# formats (CSV, print-ready HTML, AIAA-format LaTeX) so the formatting
-# logic has one source of truth instead of being duplicated in JS.
-#
-# Scope, deliberately: authoring and exporting test cards, not running or
-# tracking them. No review/approval states, no telemetry, no multi-user
-# permissions -- see the header of the scoping conversation this came
-# from for the full list of things this intentionally does NOT do.
-#
-"""
-Single-file entry point. Run and a browser window opens with a test card
-editor: card metadata, an ordered list of test points, and a nomenclature
-panel for manually-entered nomenclature.
 
+# perceptor.py:   TEST CARD EDITOR
+# AUTHOR:         DANIEL DESAI
+# UPDATED:        2026-09-14
+# VERSION:        0.1.1
+# 
+# Single stdlib file; client-side editor state, server only handles exports.
+
+"""
 Usage
 -----
     python3 perceptor.py                   # open GUI on http://localhost:5790
@@ -38,6 +26,7 @@ import base64
 import binascii
 import csv
 import io
+import importlib.util
 import json
 import os
 import re
@@ -50,20 +39,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Data model
-# ══════════════════════════════════════════════════════════════════════
+# Data model
 
 @dataclass
 class TestPoint:
     seq: int
     action: str = ""
     expected: str = ""
-    # What was actually observed when the point was run -- always
-    # user-entered for now (see the README's "Scoped, not yet started"
-    # notes for what an automated-capture path into this field would
-    # need). Stays editable even on a locked point, same as the sign-off
-    # fields below: this is execution data, not plan content.
+    # What was actually observed when the point was run -- user-entered,
+    # stays editable even on a locked point since this is execution data.
     observed: str = ""
     reference: str = ""
     responsible_party: str = ""
@@ -74,13 +58,11 @@ class TestPoint:
     # True if this point existed at the moment the card was last exported
     # locked -- see the "Locking" note on TestCard below.
     locked: bool = False
-    # Flagged is independent of locked -- always toggleable, even on a
-    # locked point (fields that are locked stay locked either way; flag
-    # only recolors the point number and whatever's currently editable).
+    # Independent of locked -- always toggleable, recolors the point
+    # number and whatever fields are currently editable.
     flagged: bool = False
-    # Filenames of images captured for this point (see /capture_image).
-    # Files live in the working directory alongside .test/.camp files --
-    # only the filename is stored here, not the image data.
+    # Filenames only (see /capture_image); files live in the working
+    # directory alongside .test/.camp files, not the image data itself.
     images: list = field(default_factory=list)
 
 
@@ -114,16 +96,12 @@ class TestCard:
     system: str = ""
     subsystem: str = ""
     test_type: str = ""
-    # Free-text requirement code(s) this test verifies (e.g. "REQ-BATT-014,
-    # REQ-BATT-021"). Deliberately unstructured -- a campaign's Requirements
-    # table is the source of truth for what a requirement code means;
-    # tracing which test covers which requirement is a manual/human
-    # responsibility, not something this field enforces or validates.
+    # Free-text requirement code(s) this test verifies. Deliberately
+    # unstructured -- tracing coverage is a manual, unenforced responsibility.
     requirements: str = ""
     points: list = field(default_factory=list)         # list[TestPoint]
-    # Manual nomenclature entries: list of [symbol, definition, units, locked].
-    # Symbol may be a raw LaTeX command (e.g. "\alpha", "\Delta_max") --
-    # see GREEK_UNICODE / _latex_symbol for how each export renders it.
+    # [symbol, definition, units, locked]. Symbol may be raw LaTeX (e.g.
+    # "\alpha") -- see GREEK_UNICODE / _latex_symbol for how it renders.
     nomenclature: list = field(default_factory=list)
     # Reference documents cited by test points: list of [ref id, description, locked].
     references: list = field(default_factory=list)
@@ -131,17 +109,8 @@ class TestCard:
     # each rendered as its own table on the printed card.
     notes: list = field(default_factory=list)       # list[[text, locked]]
     warnings: list = field(default_factory=list)     # list[[text, locked]]
-    # Locking is a workflow marker, not a security feature (it's plain JSON
-    # -- anyone can hand-edit the flags away). Exporting "locked" freezes
-    # every point/nomenclature/reference/note/warning currently on the card
-    # (sets each one's own `locked` flag) and this card-level flag, as a
-    # record of "this much was reviewed/issued as of this export". After
-    # that: card metadata stays editable only for test_conductor,
-    # quality_assurance, and date; existing (locked) points can't be
-    # deleted and can only be edited on date/time/initial/quality; existing
-    # nomenclature/reference/note/warning rows can't be edited or deleted.
-    # New rows added afterward are unlocked and fully editable until the
-    # card is exported locked again.
+    # A workflow marker, not security (plain JSON, hand-editable). Exporting
+    # locked freezes every current row and restricts further edits to a few fields.
     locked: bool = False
 
     @staticmethod
@@ -162,13 +131,7 @@ class TestCard:
 
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Nomenclature
-#
-#  Manual entries only -- an earlier autoscan-from-point-text version
-#  didn't scan well in practice, so this is just a flat, hand-maintained
-#  symbol/definition list on the card.
-# ══════════════════════════════════════════════════════════════════════
+# Nomenclature -- manual entries only (an autoscan approach didn't scan well in practice).
 
 def sorted_nomenclature(card: TestCard) -> list:
     """card.nomenclature as a list of (symbol, definition, units, locked),
@@ -201,9 +164,7 @@ def symbol_display(sym: str) -> str:
     return _GREEK_CMD_RE.sub(lambda m: GREEK_UNICODE.get(m.group(1), m.group(0)), sym or "")
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Export: CSV
-# ══════════════════════════════════════════════════════════════════════
+# Export: CSV
 
 def export_csv(card: TestCard) -> str:
     buf = io.StringIO()
@@ -223,10 +184,7 @@ def export_csv(card: TestCard) -> str:
     return buf.getvalue()
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Export: print-ready HTML (browser "print to PDF" -- no new dependency,
-#  same rationale drift.py used for keeping the whole stack stdlib+JS)
-# ══════════════════════════════════════════════════════════════════════
+# Export: print-ready HTML (browser print-to-PDF, no new dependency).
 
 def _h(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -304,13 +262,7 @@ def export_print_html(card: TestCard, host: str = "localhost") -> str:
 </body></html>"""
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Export: AIAA-format LaTeX
-#
-#  Suppressed from the UI/export menu for now -- function and /export/tex
-#  route are left in place so it's a one-line re-add (button + handler)
-#  when it's wanted again.
-# ══════════════════════════════════════════════════════════════════════
+# Export: AIAA-format LaTeX -- suppressed from the UI for now, route left in place.
 
 _LATEX_SPECIAL = {
     "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
@@ -325,10 +277,8 @@ def latex_escape(s: str) -> str:
 
 
 def _latex_symbol(sym: str) -> str:
-    # Render as real LaTeX math wherever it looks like one:
-    #  - a raw LaTeX command, optionally subscripted: \alpha, \Delta_max
-    #  - a plain subscripted var: V_max, T_set
-    # Anything else (plain abbreviations like CG, PID) stays literal text.
+    # Renders as real LaTeX math for a raw command (\alpha) or a plain
+    # subscripted var (V_max); anything else (CG, PID) stays literal text.
     m = re.match(r"^(\\[A-Za-z]+)(?:_([A-Za-z0-9]+))?$", sym or "")
     if m:
         base, sub = m.group(1), m.group(2)
@@ -351,10 +301,8 @@ def export_tex(card: TestCard) -> str:
         f"{latex_escape(p.reference)} \\\\"
         for p in card.points
     )
-    # Plain article class + AIAA-style structure (nomenclature tabbing
-    # block, booktabs table). Swap \documentclass{article} for
-    # \documentclass{aiaa} below if the AIAA LaTeX class is installed --
-    # same convention as wrench_allocation_paper.tex.
+    # Plain article class + AIAA-style structure; swap in \documentclass{aiaa}
+    # below if that LaTeX class is installed.
     return f"""% {card.id} -- {card.title}, generated by perceptor.py
 % AIAA-style test plan document. Intended to be imported into
 % LibreOffice (LaTeX extension) and extended after the test is run.
@@ -406,9 +354,7 @@ XXXXXXXXXXXXXXXX \\= \\kill
 """
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Browser UI
-# ══════════════════════════════════════════════════════════════════════
+# Browser UI
 
 _INDEX_HTML = """<!doctype html>
 <html>
@@ -441,28 +387,28 @@ _INDEX_HTML = """<!doctype html>
 
 <h2 class="no-rule">Test points</h2>
 <div id="pointsList"></div>
-<div class="row"><button class="btn" id="addPointBtn">+ add point</button></div>
+<div class="row"><button class="btn btn-plus" id="addPointBtn" title="add point">+</button></div>
 
 <h2 class="no-rule">Nomenclature</h2>
 <table class="nomtable" id="nomTable">
   <tr><th>Symbol</th><th>Definition</th><th>Units</th><th class="blank-th" style="width:60px"></th></tr>
 </table>
-<div class="row"><button class="btn" id="addNomBtn">+ add symbol</button></div>
+<div class="row"><button class="btn btn-plus" id="addNomBtn" title="add symbol">+</button></div>
 
 <h2 class="no-rule">References</h2>
 <table class="nomtable" id="refTable">
   <tr><th>Reference</th><th>Description</th><th class="blank-th" style="width:60px"></th></tr>
 </table>
-<div class="row"><button class="btn" id="addRefBtn">+ add reference</button></div>
+<div class="row"><button class="btn btn-plus" id="addRefBtn" title="add reference">+</button></div>
 
 
 <h2 class="no-rule">Warnings</h2>
 <div id="warningsList"></div>
-<div class="row"><button class="btn" id="addWarningBtn">+ add warning</button></div>
+<div class="row"><button class="btn btn-plus" id="addWarningBtn" title="add warning">+</button></div>
 
 <h2 class="no-rule">Notes</h2>
 <div id="notesList"></div>
-<div class="row"><button class="btn" id="addNoteBtn">+ add note</button></div>
+<div class="row"><button class="btn btn-plus" id="addNoteBtn" title="add note">+</button></div>
 
 
 <h2>Save / load / export</h2>
@@ -477,16 +423,19 @@ _INDEX_HTML = """<!doctype html>
 <div id="saveStatus" class="hint"></div>
 
 <script>
-// Hide the app-title branding when this page is embedded (e.g. as a
-// STARSCOPE tab's iframe) -- STARSCOPE already has its own header and
-// the tab bar identifies which test is open, so it's just redundant
-// there. Standalone use (opened directly, not in an iframe) is
-// unaffected. visibility (not display) so the space stays reserved --
-// STARSCOPE overlays its own filename label into exactly this space,
-// which only lines up if this box keeps its height.
+// Hide the app-title branding when embedded (e.g. a STARSCOPE tab's
+// iframe) -- redundant there since STARSCOPE has its own header.
 if (window.self !== window.top) {
   document.querySelectorAll("h1, .sub").forEach(el => el.style.visibility = "hidden");
 }
+
+// True only if jira_ticket.py was found in the working directory at
+// startup -- see jira_ticket.py's own docstring.
+const JIRA_AVAILABLE = __JIRA_AVAILABLE__;
+
+// Set by STARSCOPE once, right after this iframe loads (openTestTab() in
+// starscope.py); `var` (not `let`) so that external write reaches this binding.
+var starscopeJiraEpicKey = "";
 
 let card = {
   id: "TC-001", title: "Untitled Test Card", revision: "A", author: "",
@@ -518,8 +467,21 @@ function nextSeq() {
   return Math.floor(max / 10) * 10 + 10;
 }
 
+// Google Material Symbols, embedded inline (not a file/CDN) so they work
+// fully offline; fill="currentColor" picks up each button's own hover color.
+const ICON_FLAG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M200-120v-680h360l16 80h224v400H520l-16-80H280v280h-80Zm300-440Zm86 160h134v-240H510l-16-80H280v240h290l16 80Z"/></svg>';
+const ICON_PHOTO_CAMERA = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M480-260q75 0 127.5-52.5T660-440q0-75-52.5-127.5T480-620q-75 0-127.5 52.5T300-440q0 75 52.5 127.5T480-260Zm0-80q-42 0-71-29t-29-71q0-42 29-71t71-29q42 0 71 29t29 71q0 42-29 71t-71 29ZM160-120q-33 0-56.5-23.5T80-200v-480q0-33 23.5-56.5T160-760h126l74-80h240l74 80h126q33 0 56.5 23.5T880-680v480q0 33-23.5 56.5T800-120H160Zm0-80h640v-480H638l-73-80H395l-73 80H160v480Zm320-240Z"/></svg>';
+const ICON_ADD_A_PHOTO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M440-440ZM120-120q-33 0-56.5-23.5T40-200v-480q0-33 23.5-56.5T120-760h126l74-80h240v80H355l-73 80H120v480h640v-360h80v360q0 33-23.5 56.5T760-120H120Zm640-560v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80ZM440-260q75 0 127.5-52.5T620-440q0-75-52.5-127.5T440-620q-75 0-127.5 52.5T260-440q0 75 52.5 127.5T440-260Zm0-80q-42 0-71-29t-29-71q0-42 29-71t71-29q42 0 71 29t29 71q0 42-29 71t-71 29Z"/></svg>';
+const ICON_SPEED = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M480-316.5q38-.5 56-27.5l224-336-336 224q-27 18-28.5 55t22.5 61q24 24 62 23.5Zm0-483.5q59 0 113.5 16.5T696-734l-76 48q-33-17-68.5-25.5T480-720q-133 0-226.5 93.5T160-400q0 42 11.5 83t32.5 77h552q23-38 33.5-79t10.5-85q0-36-8.5-70T766-540l48-76q30 47 47.5 100T880-406q1 57-13 109t-41 99q-11 18-30 28t-40 10H204q-21 0-40-10t-30-28q-26-45-40-95.5T80-400q0-83 31.5-155.5t86-127Q252-737 325-768.5T480-800Zm7 313Z"/></svg>';
+const ICON_BOOKMARK_ADD = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M200-120v-640q0-33 23.5-56.5T280-840h240v80H280v518l200-86 200 86v-278h80v400L480-240 200-120Zm80-640h240-240Zm400 160v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80Z"/></svg>';
+const ICON_ARROW_UPWARD = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M440-160v-487L216-423l-56-57 320-320 320 320-56 57-224-224v487h-80Z"/></svg>';
+const ICON_ARROW_DOWNWARD = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M440-800v487L216-537l-56 57 320 320 320-320-56-57-224 224v-487h-80Z"/></svg>';
+const ICON_CLOSE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>';
+// A thumbnail chip's own label icon, distinct from the point-button-cluster icons above.
+const ICON_IMAGE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm40-80h480L570-480 450-320l-90-120-120 160Zm-40 80v-560 560Z"/></svg>';
+
 const QUALITY_OPTIONS = [
-  ["", "(none)"],
+  ["", "[None]"],
   ["RFI", "\U0001F535 RFI"],
   ["PASS", "\U0001F7E2 PASS"],
   ["CAUTION", "\U0001F7E0 CAUTION"],
@@ -531,14 +493,8 @@ function qualitySelect(i, current) {
   return `<select data-i="${i}" data-f="quality">${opts}</select>`;
 }
 
-// ---- Camera capture ----
-// One camera stream, shared across all points (the camera is fixed
-// hardware, not per-point) -- acquired once on first use via
-// getUserMedia() and kept open, rather than re-requesting per capture
-// (each re-request is slow and flickers the camera light for no reason
-// on a device that isn't changing). Reaches USB webcams, UVC-class
-// thermal cameras, or any other device the OS already exposes as a
-// standard video-capture source -- nothing that needs a vendor SDK.
+// One camera stream shared across all points, acquired once via
+// getUserMedia() -- reaches any UVC-class video device the OS exposes.
 let cameraStream = null;
 let cameraVideo = null;
 let cameraCanvas = null;
@@ -601,6 +557,37 @@ async function capturePointImage(i) {
   }
 }
 
+async function createJiraTicket(i) {
+  const p = card.points[i];
+  const msgEl = document.getElementById("pt-jira-msg-" + i);
+  if (msgEl) msgEl.innerHTML = "Creating ticket...";
+  const summary = `${card.id} pt ${p.seq}: ${(p.action || "(no action text)").slice(0, 120)}`;
+  const description = [
+    `Test: ${card.id} -- ${card.title}`,
+    `Point ${p.seq}`,
+    `Action: ${p.action || ""}`,
+    `Expected: ${p.expected || ""}`,
+    `Observed: ${p.observed || ""}`,
+    `Reference: ${p.reference || ""}`,
+    `Quality: ${p.quality || ""}`,
+  ].join("\\n");
+  try {
+    const res = await fetch("/create_jira_ticket", {
+      method: "POST",
+      body: JSON.stringify({summary, description, epic_key: starscopeJiraEpicKey || ""}),
+    });
+    const result = await res.json();
+    if (!msgEl) return;
+    if (result.success) {
+      msgEl.innerHTML = `Created <a href="${esc(result.url)}" target="_blank" rel="noopener">${esc(result.key)}</a>`;
+    } else {
+      msgEl.textContent = `Ticket creation failed: ${result.error || "unknown error"}`;
+    }
+  } catch (err) {
+    if (msgEl) msgEl.textContent = `Ticket creation failed: ${err}`;
+  }
+}
+
 function togglePreview(i) {
   if (previewOpenIndex === i) {
     if (cameraVideo && cameraVideo.parentElement) cameraVideo.parentElement.removeChild(cameraVideo);
@@ -627,19 +614,25 @@ function renderPoints() {
     const div = document.createElement("div");
     div.className = "pt-card" + (locked ? " locked" : "") + (flagged ? " flagged" : "");
     const imgChips = (p.images || []).map(fn =>
-      `<span class="thumb-chip">\U0001F4F7 ${esc(fn)} <button class="btn mini" data-rm-img="${esc(fn)}" data-i="${i}">x</button></span>`
+      `<span class="thumb-chip">${ICON_IMAGE} ${esc(fn)} <button class="btn mini btn-x" data-rm-img="${esc(fn)}" data-i="${i}">x</button></span>`
     ).join("");
+    // Ticket is offered on CAUTION/FAIL (a verdict), not on flagged,
+    // which is just a "pay attention here" highlight independent of pass/fail.
+    const showJiraBtn = JIRA_AVAILABLE && (p.quality === "CAUTION" || p.quality === "FAIL");
     div.innerHTML = `
       <div class="pt-head">
         <input class="seq" data-i="${i}" data-f="seq" value="${esc(p.seq)}">
         ${locked ? '<span class="lock-tag">\U0001F512 locked</span>' : ""}
         <div class="pt-btns">
-          <button class="btn mini" data-act="up" data-i="${i}">&uarr;</button>
-          <button class="btn mini" data-act="down" data-i="${i}">&darr;</button>
-          <button class="btn mini flag-btn${flagged ? " flagged" : ""}" data-act="flag" data-i="${i}" title="flag">\U0001F6A9</button>
-          <button class="btn mini" data-act="preview" data-i="${i}" title="camera preview">\U0001F4F7</button>
-          <button class="btn mini" data-act="capture" data-i="${i}" title="capture image">\U0001F4F8</button>
-          <button class="btn mini" data-act="del" data-i="${i}" ${dis}>x</button>
+          <button class="btn mini btn-icon flag-btn${flagged ? " flagged" : ""}" data-act="flag" data-i="${i}" title="flag">${ICON_FLAG}</button>
+          <button class="btn mini btn-icon" data-act="preview" data-i="${i}" title="camera preview">${ICON_PHOTO_CAMERA}</button>
+          <button class="btn mini btn-icon" data-act="capture" data-i="${i}" title="capture image">${ICON_ADD_A_PHOTO}</button>
+          <button class="btn mini btn-icon" data-act="measure" data-i="${i}" title="take measurement (not yet implemented)">${ICON_SPEED}</button>
+          ${showJiraBtn ? `<button class="btn mini btn-icon" data-act="jira" data-i="${i}" title="create Jira ticket">${ICON_BOOKMARK_ADD}</button>` : ""}
+          <span class="pt-btn-gap"></span>
+          <button class="btn mini btn-icon" data-act="up" data-i="${i}" title="move up">${ICON_ARROW_UPWARD}</button>
+          <button class="btn mini btn-icon" data-act="down" data-i="${i}" title="move down">${ICON_ARROW_DOWNWARD}</button>
+          <button class="btn mini btn-icon btn-x" data-act="del" data-i="${i}" ${dis} title="delete point">${ICON_CLOSE}</button>
         </div>
       </div>
       <div class="pt-main">
@@ -662,7 +655,8 @@ function renderPoints() {
       </div>
       <div class="pt-camera" id="pt-camera-${i}"></div>
       <div class="pt-images" id="pt-images-${i}">${imgChips}</div>
-      <div class="pt-cam-msg" id="pt-cam-msg-${i}"></div>`;
+      <div class="pt-cam-msg" id="pt-cam-msg-${i}"></div>
+      <div class="pt-cam-msg" id="pt-jira-msg-${i}"></div>`;
     list.appendChild(div);
   });
   reattachPreviewIfOpen();
@@ -674,6 +668,9 @@ function renderPoints() {
   list.querySelectorAll("select[data-f]").forEach(el => {
     el.addEventListener("change", () => {
       card.points[+el.dataset.i][el.dataset.f] = el.value;
+      // Quality change needs a re-render: the Jira ticket button's
+      // visibility is derived from it, not just displayed.
+      if (el.dataset.f === "quality") renderPoints();
     });
   });
   list.querySelectorAll("button[data-act]").forEach(btn => {
@@ -690,6 +687,8 @@ function renderPoints() {
       }
       if (act === "capture") { capturePointImage(i); return; }
       if (act === "preview") { togglePreview(i); return; }
+      if (act === "jira") { createJiraTicket(i); return; }
+      // "measure" is a stub -- falls through to the plain re-render below.
       renderPoints();
     });
   });
@@ -732,7 +731,7 @@ function renderNomenclature() {
       <td><input value="${esc(sym)}" data-i="${i}" data-f="0" placeholder="\\\\alpha" ${dis}></td>
       <td><input value="${esc(defn)}" data-i="${i}" data-f="1" placeholder="definition" ${dis}></td>
       <td><input value="${esc(units||"")}" data-i="${i}" data-f="2" placeholder="units" ${dis}></td>
-      <td><button class="btn mini" data-del="${i}" ${dis}>x</button></td>`;
+      <td><button class="btn mini btn-x" data-del="${i}" ${dis}>x</button></td>`;
     t.appendChild(tr);
   });
   t.querySelectorAll("input[data-i]").forEach(inp => {
@@ -763,7 +762,7 @@ function renderReferences() {
     tr.innerHTML = `
       <td><input value="${esc(ref)}" data-i="${i}" data-f="0" placeholder="REQ-1234" ${dis}></td>
       <td><input value="${esc(desc)}" data-i="${i}" data-f="1" placeholder="description" ${dis}></td>
-      <td><button class="btn mini" data-del="${i}" ${dis}>x</button></td>`;
+      <td><button class="btn mini btn-x" data-del="${i}" ${dis}>x</button></td>`;
     t.appendChild(tr);
   });
   t.querySelectorAll("input[data-i]").forEach(inp => {
@@ -792,7 +791,7 @@ function renderTextList(listId, key) {
     const row = document.createElement("div");
     row.className = "list-row";
     row.innerHTML = `<textarea data-key="${key}" data-i="${i}" ${dis}>${esc(val)}</textarea>
-      <button class="btn mini" data-key="${key}" data-del="${i}" ${dis}>x</button>`;
+      <button class="btn mini btn-x" data-key="${key}" data-del="${i}" ${dis}>x</button>`;
     el.appendChild(row);
   });
   el.querySelectorAll("textarea[data-key]").forEach(ta => {
@@ -851,9 +850,8 @@ async function saveCard(statusEl) {
   }
 }
 document.getElementById("saveLockedBtn").addEventListener("click", () => {
-  // Locking is a workflow marker, not security -- see the note on
-  // TestCard.locked in perceptor.py. Freezing happens client-side so the
-  // editor immediately reflects what was just saved, not just the file.
+  // Locking is a workflow marker, not security. Freezing happens
+  // client-side so the editor reflects it immediately, not just the file.
   freezeCurrentCard();
   rerenderAll();
   saveCard(document.getElementById("saveStatus"));
@@ -867,9 +865,8 @@ document.getElementById("loadJsonBtn").addEventListener("click", () => {
   document.getElementById("loadJsonFile").click();
 });
 function normalizePairList(items, width) {
-  // Mirrors _normalize_pair_list in perceptor.py: pad each row to `width`
-  // elements (the last always the locked flag), accept a bare string in
-  // place of a single-element row (pre-locking notes/warnings).
+  // Pads each row to `width` (the last element the locked flag); accepts
+  // a bare string for a single-element row (pre-locking notes/warnings).
   return (items || []).map(item => {
     let row = typeof item === "string" ? [item] : item.slice();
     while (row.length < width - 1) row.push("");
@@ -904,10 +901,8 @@ document.getElementById("loadJsonFile").addEventListener("change", (e) => {
 });
 
 async function postExport(path, filename, mime) {
-  // For the print path: open the window synchronously, before the await
-  // below -- by the time a fetch() resolves, the browser has lost the
-  // click's "user gesture" context and many popup blockers will silently
-  // kill a window.open() called after that point.
+  // Open the print window synchronously, before the await below -- many
+  // popup blockers kill a window.open() called after a fetch() resolves.
   let w = null;
   if (path === "/export/print") {
     w = window.open("", "_blank");
@@ -942,9 +937,8 @@ renderReferences();
 renderTextList("notesList", "notes");
 renderTextList("warningsList", "warnings");
 
-// If opened as ?load=<filename>, fetch that .test file from the server's
-// working directory and populate the editor with it instead of the blank
-// template above -- this is how STARSCOPE opens a specific test in a tab.
+// If opened as ?load=<filename>, fetch that .test file and populate the
+// editor with it -- how STARSCOPE opens a specific test in a tab.
 const _loadFile = new URLSearchParams(window.location.search).get("load");
 if (_loadFile) {
   fetch("/load?file=" + encodeURIComponent(_loadFile))
@@ -953,10 +947,8 @@ if (_loadFile) {
     .catch(() => { document.getElementById("m-id").value = _loadFile.replace(/\\.test$/, ""); });
 }
 
-// Exposed so an embedding page (e.g. STARSCOPE's tab chrome) can read the
-// live in-editor state without needing its own copy of it -- `card` is a
-// module-scope `let` and wouldn't otherwise be reachable from outside an
-// iframe. Read-only by convention; nothing here calls this.
+// Lets an embedding page (STARSCOPE's tab chrome) read the live editor
+// state, since `card` is a module-scope `let` otherwise unreachable from an iframe.
 window.getCard = () => card;
 </script>
 </body>
@@ -970,6 +962,31 @@ def _safe_filename(stem: str, ext: str) -> str:
     stem = os.path.basename((stem or "card").strip()) or "card"
     stem = re.sub(r"[^A-Za-z0-9._-]", "_", stem)
     return stem + ext
+
+
+def _load_jira_module():
+    """Optional Jira integration -- see jira_ticket.py's own docstring.
+    Looked up in the CURRENT WORKING DIRECTORY specifically (same place
+    .test/.camp files and captured photos already live), not next to
+    perceptor.py itself, so dropping the file in only turns this on for
+    that one working directory. Absent (the common case) or broken in any
+    way -> None, silently, so the rest of the app never has to think
+    about whether Jira is involved."""
+    path = os.path.join(os.getcwd(), "jira_ticket.py")
+    if not os.path.isfile(path):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("jira_ticket", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+_jira = _load_jira_module()
+JIRA_AVAILABLE = _jira is not None
+_INDEX_HTML = _INDEX_HTML.replace("__JIRA_AVAILABLE__", "true" if JIRA_AVAILABLE else "false")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -997,9 +1014,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, "text/html", _INDEX_HTML.encode())
         elif path == "/load":
-            # Read a .test file by name from the working directory --
-            # used by STARSCOPE to open a specific test in a tab, and
-            # generally useful for scripting against a saved file.
+            # Read a .test file by name from the working directory -- how
+            # STARSCOPE opens a specific test in a tab.
             qs = parse_qs(parsed.query)
             filename = (qs.get("file") or [""])[0]
             safe = os.path.basename(filename)
@@ -1013,9 +1029,8 @@ class _Handler(BaseHTTPRequestHandler):
             except OSError as e:
                 self._send_json(500, {"error": str(e)})
         elif path == "/list_files":
-            # Lists files in the working directory by extension, e.g.
-            # /list_files?ext=.test -- lets a picker browse what's already
-            # on disk instead of requiring the exact filename up front.
+            # Lists files in the working directory by extension -- lets a
+            # picker browse what's already on disk.
             qs = parse_qs(parsed.query)
             ext = (qs.get("ext") or [""])[0]
             if not re.match(r"^\.[A-Za-z0-9]+$", ext or ""):
@@ -1036,10 +1051,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
 
     def _serve_static(self, filename: str) -> None:
-        # CSS assets live next to the script itself, not the working
-        # directory -- cwd is reserved for user data (.test/.camp/photos),
-        # this is a package asset and needs to resolve the same way
-        # regardless of where the script was launched from.
+        # CSS assets live next to the script itself, not cwd (reserved for
+        # user data), so this resolves the same regardless of launch dir.
         safe = os.path.basename(filename)
         static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
         file_path = os.path.join(static_dir, safe)
@@ -1083,10 +1096,34 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send_json(200, {"saved": True, "filename": filename, "path": out_path})
 
+    def _handle_create_jira_ticket(self):
+        # {"summary": ..., "description": ..., "epic_key": ..., "issue_type": ...}.
+        # issue_type optional -- falls back to cfg["issue_type"] if omitted.
+        if not JIRA_AVAILABLE:
+            self._send_json(404, {"success": False, "error": "Jira integration not available"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(length))
+        except json.JSONDecodeError as e:
+            self._send_json(400, {"success": False, "error": f"bad request: {e}"})
+            return
+        try:
+            result = _jira.create_ticket(
+                payload.get("summary", ""), payload.get("description", ""),
+                payload.get("epic_key", ""), payload.get("issue_type") or None,
+            )
+        except Exception as e:
+            # jira_ticket.py is user-supplied; a bug in it shouldn't take the server down.
+            result = {"success": False, "error": f"jira_ticket.py raised: {e}"}
+        self._send_json(200, result)
+
     def do_POST(self):
         path = urlparse(self.path).path
         if path == "/capture_image":
             self._handle_capture_image()
+        elif path == "/create_jira_ticket":
+            self._handle_create_jira_ticket()
             return
         try:
             card = self._read_card()
@@ -1100,9 +1137,8 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/export/tex":
             self._send(200, "text/x-tex", export_tex(card).encode())
         elif path == "/save":
-            # Test files (.test) are written to the server's working
-            # directory rather than pushed to the browser -- these are
-            # meant to be re-opened by this program, not downloaded.
+            # Written to the server's working directory, not pushed to the
+            # browser -- meant to be re-opened by this program.
             filename = _safe_filename(card.id, ".test")
             out_path = os.path.join(os.getcwd(), filename)
             try:
