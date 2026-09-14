@@ -20,7 +20,7 @@ python3 perceptor.py [--port <n>] [--no-browser]
 * **Runtime:** Standard Python 3 library (`http.server`).
 * **Exports:** `python-docx` (`pip install python-docx`) for Word generation.
 * **Development/Testing:** `pytest` (`pip install pytest`).
-* **Jira integration:** Jira account and API key.
+* **Jira integration:** Jira account and API key. Edit `jira_config_example.jsonc` and save as `jira_config.json`.
 
 ---
 
