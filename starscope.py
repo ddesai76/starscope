@@ -1,26 +1,13 @@
 #!/usr/bin/env python3
-#
-# starscope.py:    Test campaign creator, built on top of Perceptor
-# AUTHOR:          DANIEL DESAI
-# VERSION:         0.1.0
-#
-# STARSCOPE is Perceptor plus one more document type (Campaign) and a tab
-# bar. It does not reimplement Perceptor's test-card editor -- a Campaign
-# tab's "open test" action opens perceptor.py's own editor UI in an iframe
-# (served at /test?load=<file>), and the HTTP handler here subclasses
-# perceptor's so every existing /save, /export/*, /load, /list_files,
-# /static/* route keeps working unchanged for those tabs. This file only
-# adds what's new:
-# the Campaign data model, the Campaign tab's UI, and Campaign-specific
-# export routes (including docx, which is why this file -- unlike
-# perceptor.py -- depends on python-docx).
-#
-"""
-Single-file entry point. Run and a browser window opens with a tab bar:
-tab 1 is always the Campaign editor; opening a test from the Campaign's
-Tests table adds another tab, which is Perceptor's own editor pointed at
-that test's .test file.
 
+# starscope.py:   TEST CAMPAIGN DESIGNER
+# AUTHOR:         DANIEL DESAI
+# UPDATED:        2026-09-14
+# VERSION:        0.1.1
+
+# Subclasses perceptor's HTTP handler; test tabs reuse its editor via <iframe>.
+
+"""
 Usage
 -----
     python3 starscope.py                   # opens the GUI on http://localhost:5791
@@ -57,9 +44,7 @@ from docx.oxml import OxmlElement
 import perceptor
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Data model
-# ══════════════════════════════════════════════════════════════════════
+# Data model
 
 @dataclass
 class CampaignTestRow:
@@ -68,11 +53,11 @@ class CampaignTestRow:
     title: str = ""
     status: str = ""   # "", COMPLETE, IN_PROGRESS, TO_DO, BLOCKED
     # Pulled from the linked .test file's own Author metadata, not typed
-    # here directly -- kept in sync opportunistically (whenever the row's
-    # Test ID is added/changed and a matching file exists), same "best
-    # effort, no error if it doesn't match yet" spirit as everything else
-    # in this file's traceability.
+    # here -- kept in sync opportunistically, no error if it doesn't match yet.
     author: str = ""
+    # Same pattern as Author, but not Author itself: a Task may get
+    # reassigned in Jira, so baking in the test's original author wouldn't stay meaningful.
+    requirements: str = ""
 
 
 @dataclass
@@ -90,14 +75,15 @@ class Campaign:
     # Requirement code + description, same shape as a TestCard's References.
     requirements: list = field(default_factory=list)   # list[(code, description)]
     tests: list = field(default_factory=list)           # list[CampaignTestRow] -- "Test Series"
-    # Same shape/columns as tests, rendered as its own section right after
-    # it -- for tests that support the series but aren't part of its
-    # numbered sequence (e.g. one-off checkouts, vendor acceptance tests).
+    # Same shape as tests, for tests that support the series but aren't
+    # part of its numbered sequence (one-off checkouts, vendor acceptance).
     ancillary_tests: list = field(default_factory=list)   # list[CampaignTestRow]
-    # Free-form writeup blocks, rendered after the Tests table: each is a
-    # (header, text) pair. header renders as a heading; text is preserved
-    # as-is (not reformatted) wherever it's exported.
+    # Free-form writeup blocks: each a (header, text) pair, rendered after
+    # the Tests table; text is preserved as-is wherever it's exported.
     sections: list = field(default_factory=list)         # list[(header, text)]
+    # Optional Jira Epic every ticket from this campaign links to. Passed
+    # down into each open test tab once its iframe loads -- see openTestTab() below.
+    jira_epic_key: str = ""
 
     @staticmethod
     def from_dict(d: dict) -> "Campaign":
@@ -188,9 +174,7 @@ def compute_vcrm(camp: Campaign) -> dict:
     }
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Export: print-ready HTML (same visual system as Perceptor's test card)
-# ══════════════════════════════════════════════════════════════════════
+# Export: print-ready HTML (same visual system as Perceptor's test card).
 
 def export_campaign_print_html(camp: Campaign, host: str = "localhost") -> str:
     h = perceptor._h
@@ -203,17 +187,17 @@ def export_campaign_print_html(camp: Campaign, host: str = "localhost") -> str:
 """
     test_rows = "\n".join(
         f"<tr><td>{t.seq}</td><td>{h(t.test_id)}</td><td>{h(t.title)}</td><td>{h(t.author)}</td>"
-        f"<td>{h(STATUS_LABELS.get(t.status, t.status))}</td></tr>"
+        f"<td>{h(t.requirements)}</td><td>{h(STATUS_LABELS.get(t.status, t.status))}</td></tr>"
         for t in camp.tests
     )
     anc_rows = "\n".join(
         f"<tr><td>{t.seq}</td><td>{h(t.test_id)}</td><td>{h(t.title)}</td><td>{h(t.author)}</td>"
-        f"<td>{h(STATUS_LABELS.get(t.status, t.status))}</td></tr>"
+        f"<td>{h(t.requirements)}</td><td>{h(STATUS_LABELS.get(t.status, t.status))}</td></tr>"
         for t in camp.ancillary_tests
     )
     anc_section = "" if not camp.ancillary_tests else f"""<h2>Ancillary Tests</h2>
 <table>
-<tr><th style="width:6%">#</th><th style="width:16%">Test ID</th><th>Title</th><th style="width:16%">Author</th><th style="width:14%">Status</th></tr>
+<tr><th style="width:6%">#</th><th style="width:14%">Test ID</th><th>Title</th><th style="width:12%">Author</th><th style="width:16%">Requirements</th><th style="width:12%">Status</th></tr>
 {anc_rows}
 </table>
 """
@@ -244,7 +228,7 @@ def export_campaign_print_html(camp: Campaign, host: str = "localhost") -> str:
 </div>
 {req_section}<h2>Test Series</h2>
 <table>
-<tr><th style="width:6%">#</th><th style="width:16%">Test ID</th><th>Title</th><th style="width:16%">Author</th><th style="width:14%">Status</th></tr>
+<tr><th style="width:6%">#</th><th style="width:14%">Test ID</th><th>Title</th><th style="width:12%">Author</th><th style="width:16%">Requirements</th><th style="width:12%">Status</th></tr>
 {test_rows}
 </table>
 {anc_section}{sections_html}
@@ -258,7 +242,7 @@ def export_vcrm_print_html(vcrm: dict, host: str = "localhost") -> str:
     def covering_str(row):
         if not row["covering_tests"]:
             return "--"
-        parts = [f"{c['test_id']} ({STATUS_LABELS.get(c['status'], c['status'] or '(none)')})"
+        parts = [f"{c['test_id']} ({STATUS_LABELS.get(c['status'], c['status'] or '[None]')})"
                   for c in row["covering_tests"]]
         return ", ".join(parts)
 
@@ -283,10 +267,7 @@ def export_vcrm_print_html(vcrm: dict, host: str = "localhost") -> str:
 </body></html>"""
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Export: .docx (python-docx -- the one STARSCOPE-only dependency;
-#  perceptor.py itself stays stdlib-only)
-# ══════════════════════════════════════════════════════════════════════
+# Export: .docx (python-docx -- the one STARSCOPE-only dependency).
 
 _HEADER_FILL = "E7EEF5"
 _WARN_FILL = "F8D7D7"
@@ -353,15 +334,16 @@ def export_campaign_docx(camp: Campaign) -> bytes:
 
     doc.add_heading("Test Series", level=1)
     _add_table(
-        doc, ["#", "Test ID", "Title", "Author", "Status"],
-        [(t.seq, t.test_id, t.title, t.author, STATUS_LABELS.get(t.status, t.status)) for t in camp.tests],
+        doc, ["#", "Test ID", "Title", "Author", "Requirements", "Status"],
+        [(t.seq, t.test_id, t.title, t.author, t.requirements, STATUS_LABELS.get(t.status, t.status))
+         for t in camp.tests],
     )
 
     if camp.ancillary_tests:
         doc.add_heading("Ancillary Tests", level=1)
         _add_table(
-            doc, ["#", "Test ID", "Title", "Author", "Status"],
-            [(t.seq, t.test_id, t.title, t.author, STATUS_LABELS.get(t.status, t.status))
+            doc, ["#", "Test ID", "Title", "Author", "Requirements", "Status"],
+            [(t.seq, t.test_id, t.title, t.author, t.requirements, STATUS_LABELS.get(t.status, t.status))
              for t in camp.ancillary_tests],
         )
 
@@ -384,7 +366,7 @@ def export_vcrm_docx(vcrm: dict) -> bytes:
     def covering_str(row):
         if not row["covering_tests"]:
             return "--"
-        parts = [f"{c['test_id']} ({STATUS_LABELS.get(c['status'], c['status'] or '(none)')})"
+        parts = [f"{c['test_id']} ({STATUS_LABELS.get(c['status'], c['status'] or '[None]')})"
                   for c in row["covering_tests"]]
         return ", ".join(parts)
 
@@ -450,10 +432,7 @@ def export_test_docx(card: "perceptor.TestCard") -> bytes:
     return buf.getvalue()
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Browser UI: tab bar + Campaign editor. Test tabs are perceptor.py's
-#  own editor, reused unmodified via <iframe src="/test?load=...">.
-# ══════════════════════════════════════════════════════════════════════
+# Browser UI: tab bar + Campaign editor; test tabs reuse perceptor.py's editor via <iframe>.
 
 _CAMPAIGN_HTML = """<!doctype html>
 <html>
@@ -483,47 +462,48 @@ _CAMPAIGN_HTML = """<!doctype html>
       <div class="field"><label>Quality Assurance</label><input id="c-quality_assurance"></div>
       <div class="field"><label>Date</label><input id="c-date"></div>
       <div class="field"><label>System / Subsystem</label><input id="c-system"></div>
+      <div class="field" id="jira-epic-field" style="display:none"><label>Jira Epic Key</label><input id="c-jira_epic_key" placeholder="PROJ-142"></div>
     </div>
 
     <h2 class="no-rule">Requirements</h2>
     <table class="datatable" id="reqTable">
       <tr><th>Requirement</th><th>Description</th><th class="blank-th" style="width:60px"></th></tr>
     </table>
-    <div class="row"><button class="btn" id="addReqBtn">+ add requirement</button></div>
+    <div class="row"><button class="btn btn-plus" id="addReqBtn" title="add requirement">+</button></div>
 
     <h2 class="no-rule">Test Series</h2>
     <table class="datatable tests-format" id="testsTable">
       <colgroup>
-      <col style="width:5%"><col style="width:13%"><col style="width:24%">
-      <col style="width:16%"><col style="width:12%"><col style="width:30%">
+      <col style="width:4%"><col style="width:10%"><col style="width:33%">
+      <col style="width:12%"><col style="width:12%"><col style="width:9%"><col style="width:20%">
       </colgroup>
-      <tr><th>#</th><th>Test ID</th><th>Title</th><th>Author</th><th>Status</th><th class="blank-th"></th></tr>
+      <tr><th>#</th><th>Test ID</th><th>Title</th><th>Author</th><th>Requirements</th><th>Status</th><th class="blank-th"></th></tr>
     </table>
-    <div class="row"><button class="btn" id="addTestBtn">+ add test</button></div>
+    <div class="row"><button class="btn btn-plus" id="addTestBtn" title="add test">+</button></div>
     <div class="row">
-      <select id="browseTestFiles"><option value="">browse existing .test files...</option></select>
-      <button class="btn" id="addBrowsedTestBtn">add</button>
+      <select id="browseTestFiles"><option value="">Browse existing .test files...</option></select>
+      <button class="btn" id="addBrowsedTestBtn">select</button>
     </div>
     <div id="browseStatus" class="hint"></div>
 
     <h2 class="no-rule">Ancillary Tests</h2>
     <table class="datatable tests-format" id="ancTestsTable">
       <colgroup>
-      <col style="width:5%"><col style="width:13%"><col style="width:24%">
-      <col style="width:16%"><col style="width:12%"><col style="width:30%">
+      <col style="width:4%"><col style="width:10%"><col style="width:33%">
+      <col style="width:12%"><col style="width:12%"><col style="width:9%"><col style="width:20%">
       </colgroup>
-      <tr><th>#</th><th>Test ID</th><th>Title</th><th>Author</th><th>Status</th><th class="blank-th"></th></tr>
+      <tr><th>#</th><th>Test ID</th><th>Title</th><th>Author</th><th>Requirements</th><th>Status</th><th class="blank-th"></th></tr>
     </table>
-    <div class="row"><button class="btn" id="addAncTestBtn">+ add test</button></div>
+    <div class="row"><button class="btn btn-plus" id="addAncTestBtn" title="add test">+</button></div>
     <div class="row">
-      <select id="browseAncTestFiles"><option value="">browse existing .test files...</option></select>
-      <button class="btn" id="addBrowsedAncTestBtn">add</button>
+      <select id="browseAncTestFiles"><option value="">Browse existing .test files...</option></select>
+      <button class="btn" id="addBrowsedAncTestBtn">select</button>
     </div>
     <div id="ancBrowseStatus" class="hint"></div>
 
     <h2 class="no-rule">Sections</h2>
     <div id="sectionsList"></div>
-    <div class="row"><button class="btn" id="addSectionBtn">+ add section</button></div>
+    <div class="row"><button class="btn btn-plus" id="addSectionBtn" title="add section">+</button></div>
 
     <h2>Save / load / export</h2>
     <div class="row">
@@ -542,13 +522,17 @@ _CAMPAIGN_HTML = """<!doctype html>
 let camp = {
   id: "SC-001", title: "Untitled Campaign", revision: "A", author: "",
   date: new Date().toISOString().slice(0,10), project: "", test_lead: "",
-  quality_assurance: "", system: "", subsystem: "",
+  quality_assurance: "", system: "", subsystem: "", jira_epic_key: "",
   requirements: [], tests: [], ancillary_tests: [], sections: []
 };
 
+// True only if jira_ticket.py was found in the working directory at startup.
+const JIRA_AVAILABLE = __JIRA_AVAILABLE__;
+if (JIRA_AVAILABLE) document.getElementById("jira-epic-field").style.display = "";
+
 function esc(s) { return (s??"").toString().replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
-const metaFields = ["id","title","revision","author","date","project","test_lead","quality_assurance"];
+const metaFields = ["id","title","revision","author","date","project","test_lead","quality_assurance","jira_epic_key"];
 function bindMeta() {
   metaFields.forEach(f => {
     const el = document.getElementById("c-" + f);
@@ -575,7 +559,7 @@ function renderRequirements() {
     tr.innerHTML = `
       <td><input value="${esc(code)}" data-i="${i}" data-f="0" placeholder="REQ-1234"></td>
       <td><input value="${esc(desc)}" data-i="${i}" data-f="1" placeholder="description"></td>
-      <td><button class="btn mini" data-del="${i}">x</button></td>`;
+      <td><button class="btn mini btn-x" data-del="${i}">x</button></td>`;
     t.appendChild(tr);
   });
   t.querySelectorAll("input[data-i]").forEach(inp => {
@@ -590,11 +574,19 @@ document.getElementById("addReqBtn").addEventListener("click", () => {
   renderRequirements();
 });
 
+// Google Material Symbols, embedded inline (not a file/CDN) so they work
+// fully offline; fill="currentColor" picks up each button's own hover color.
+const ICON_OPEN_IN_NEW = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h280v80H200v560h560v-280h80v280q0 33-23.5 56.5T760-120H200Zm188-212-56-56 372-372H560v-80h280v280h-80v-144L388-332Z"/></svg>';
+const ICON_CLOSE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>';
+const ICON_BOOKMARK_ADD = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor"><path d="M200-120v-640q0-33 23.5-56.5T280-840h240v80H280v518l200-86 200 86v-278h80v400L480-240 200-120Zm80-640h240-240Zm400 160v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80Z"/></svg>';
+
 const STATUS_OPTIONS = [
-  ["", "(none)"],
+  ["", "[None]"],
   ["COMPLETE", "\U0001F535 COMPLETE"],
   ["IN_PROGRESS", "\U0001F7E2 IN PROGRESS"],
-  ["TO_DO", "\U0001F7E0 TO DO"],
+  // No native colored-circle emoji is genuinely magenta -- purple is the
+  // closest a real Unicode circle gets.
+  ["TO_DO", "\U0001F7E3 TO DO"],
   ["BLOCKED", "\U0001F534 BLOCKED"],
 ];
 // Plain-text labels (no colored dot -- that's UI-only, never shown in the
@@ -624,21 +616,23 @@ function renderTestsTable(list, tableId) {
       <td><input value="${esc(row.test_id)}" data-i="${i}" data-f="test_id" placeholder="TC-001"></td>
       <td class="meta-cell">${esc(row.title || "")}</td>
       <td class="meta-cell">${esc(row.author || "")}</td>
+      <td class="meta-cell">${esc(row.requirements || "")}</td>
       <td>${statusSelect(i, row.status)}</td>
       <td class="actions-cell">
-        <button class="btn" data-open="${i}">open</button>
-        <button class="btn" data-del="${i}">remove</button>
+        <button class="btn btn-icon" data-open="${i}" title="open">${ICON_OPEN_IN_NEW}</button>
+        <button class="btn btn-icon" data-del="${i}" title="remove">${ICON_CLOSE}</button>
+        ${JIRA_AVAILABLE ? `<button class="btn btn-icon" data-jira="${i}" title="create Jira ticket">${ICON_BOOKMARK_ADD}</button>` : ""}
       </td>`;
     t.appendChild(tr);
   });
   t.querySelectorAll("input[data-f], select[data-f]").forEach(el => {
     const ev = el.tagName === "SELECT" ? "change" : "input";
-    el.addEventListener(ev, () => { list[+el.dataset.i][el.dataset.f] = el.value; });
+    el.addEventListener(ev, () => {
+      list[+el.dataset.i][el.dataset.f] = el.value;
+    });
   });
-  // Title and Author are both pulled from the linked .test file, not typed
-  // here -- refresh them once someone's done editing a Test ID (blur, not
-  // every keystroke, so a re-render doesn't yank focus out from under them
-  // mid-type).
+  // Title/Author/Requirements are pulled from the linked .test file --
+  // refresh on blur (not every keystroke) so focus isn't yanked mid-type.
   t.querySelectorAll('input[data-f="test_id"]').forEach(el => {
     el.addEventListener("blur", () => backfillMetadataForRow(list, tableId, +el.dataset.i));
   });
@@ -651,9 +645,45 @@ function renderTestsTable(list, tableId) {
       if ((row.test_id || "").trim()) openTestTab(row.test_id, row.title);
     });
   });
+  t.querySelectorAll("button[data-jira]").forEach(btn => {
+    btn.addEventListener("click", () => createTestJiraTicket(list, tableId, +btn.dataset.jira));
+  });
 }
 function renderTests() { renderTestsTable(camp.tests, "testsTable"); }
 function renderAncillaryTests() { renderTestsTable(camp.ancillary_tests, "ancTestsTable"); }
+
+// Reuses the browse-picker's own status line for ticket-click results,
+// rather than adding a third message area -- the two actions never overlap.
+const TICKET_STATUS_EL_FOR_TABLE = { testsTable: "browseStatus", ancTestsTable: "ancBrowseStatus" };
+
+async function createTestJiraTicket(list, tableId, i) {
+  const row = list[i];
+  const statusEl = document.getElementById(TICKET_STATUS_EL_FOR_TABLE[tableId]);
+  const summary = `${row.test_id || "(no ID)"}: ${row.title || "(no title)"}`;
+  const description = [
+    `Test: ${row.test_id || ""} -- ${row.title || ""}`,
+    `Status: ${STATUS_LABELS[row.status] || row.status || "[None]"}`,
+    `Requirement(s): ${row.requirements || ""}`,
+  ].join("\\n");
+  statusEl.textContent = "Creating ticket...";
+  try {
+    const res = await fetch("/create_jira_ticket", {
+      method: "POST",
+      body: JSON.stringify({
+        summary, description, issue_type: "Task",
+        epic_key: camp.jira_epic_key || "",
+      }),
+    });
+    const result = await res.json();
+    if (result.success) {
+      statusEl.innerHTML = `Created <a href="${esc(result.url)}" target="_blank" rel="noopener">${esc(result.key)}</a>`;
+    } else {
+      statusEl.textContent = `Ticket creation failed: ${result.error || "unknown error"}`;
+    }
+  } catch (err) {
+    statusEl.textContent = `Ticket creation failed: ${err}`;
+  }
+}
 
 async function backfillMetadataForRow(list, tableId, i) {
   const row = list[i];
@@ -662,10 +692,11 @@ async function backfillMetadataForRow(list, tableId, i) {
   const filename = testId.replace(/[^A-Za-z0-9._-]/g, "_") + ".test";
   try {
     const res = await fetch("/load?file=" + encodeURIComponent(filename));
-    if (!res.ok) return;   // no matching file yet -- leave title/author as-is, silently
+    if (!res.ok) return;   // no matching file yet -- leave title/author/requirements as-is, silently
     const data = await res.json();
     row.title = data.title || "";
     row.author = data.author || "";
+    row.requirements = data.requirements || "";
     renderTestsTable(list, tableId);
   } catch (err) {
     // transient error -- same "silent, no validation" spirit as the rest
@@ -674,25 +705,23 @@ async function backfillMetadataForRow(list, tableId, i) {
 }
 
 document.getElementById("addTestBtn").addEventListener("click", () => {
-  camp.tests.push({seq: nextSeqFor(camp.tests), test_id: "", title: "", author: "", status: ""});
+  camp.tests.push({seq: nextSeqFor(camp.tests), test_id: "", title: "", author: "", requirements: "", status: ""});
   renderTests();
 });
 document.getElementById("addAncTestBtn").addEventListener("click", () => {
-  camp.ancillary_tests.push({seq: nextSeqFor(camp.ancillary_tests), test_id: "", title: "", author: "", status: ""});
+  camp.ancillary_tests.push({seq: nextSeqFor(camp.ancillary_tests), test_id: "", title: "", author: "", requirements: "", status: ""});
   renderAncillaryTests();
 });
 
 // Browse .test files already on disk, rather than requiring the exact
-// Test ID up front -- useful for opening a file created earlier (by this
-// person or a teammate sharing the working directory) that isn't yet a
-// row in this campaign's Test Series or Ancillary Tests table.
+// Test ID up front -- for a file created earlier by this person or a teammate.
 async function refreshFileList(selectId) {
   const sel = document.getElementById(selectId);
   const current = sel.value;
   try {
     const res = await fetch("/list_files?ext=.test");
     const data = await res.json();
-    sel.innerHTML = '<option value="">browse existing .test files...</option>' +
+    sel.innerHTML = '<option value="">Browse existing .test files...</option>' +
       (data.files || []).map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
     if ((data.files || []).includes(current)) sel.value = current;
   } catch (err) {
@@ -710,15 +739,18 @@ async function addBrowsedFile(selectId, list, tableId, statusId) {
     status.textContent = `${testId} is already in this table.`;
     return;
   }
-  // Grab the title and author too, if we can -- an empty row for every
-  // file someone browses in isn't very useful. Not fatal if this fails,
-  // the row still gets added with those left blank to fill in by hand.
-  let title = "", author = "";
+  // Grab title/author/requirements too, if we can -- not fatal if this
+  // fails, the row just gets added with those left blank to fill in by hand.
+  let title = "", author = "", requirements = "";
   try {
     const res = await fetch("/load?file=" + encodeURIComponent(filename));
-    if (res.ok) { const data = await res.json(); title = data.title || ""; author = data.author || ""; }
-  } catch (err) { /* leave title/author blank */ }
-  list.push({seq: nextSeqFor(list), test_id: testId, title: title, author: author, status: ""});
+    if (res.ok) {
+      const data = await res.json();
+      title = data.title || ""; author = data.author || ""; requirements = data.requirements || "";
+    }
+  } catch (err) { /* leave title/author/requirements blank */ }
+  list.push({seq: nextSeqFor(list), test_id: testId, title: title, author: author,
+             requirements: requirements, status: ""});
   renderTestsTable(list, tableId);
 }
 document.getElementById("browseTestFiles").addEventListener("focus", () => refreshFileList("browseTestFiles"));
@@ -739,7 +771,7 @@ function renderSections() {
     div.innerHTML = `
       <div class="sec-head">
         <input value="${esc(header)}" data-i="${i}" data-f="0" placeholder="Section header">
-        <button class="btn mini" data-del="${i}">x</button>
+        <button class="btn mini btn-x" data-del="${i}">x</button>
       </div>
       <textarea data-i="${i}" data-f="1" placeholder="Write or paste anything here">${esc(text)}</textarea>`;
     list.appendChild(div);
@@ -785,15 +817,13 @@ document.getElementById("loadCampFile").addEventListener("change", (e) => {
     if (!camp.tests) camp.tests = [];
     if (!camp.ancillary_tests) camp.ancillary_tests = [];
     if (!camp.sections) camp.sections = [];
+    if (!camp.jira_epic_key) camp.jira_epic_key = "";
     bindMeta(); renderRequirements(); renderTests(); renderAncillaryTests(); renderSections();
   });
 });
 document.getElementById("printCampBtn").addEventListener("click", async () => {
-  // Open synchronously, before the await below -- by the time a fetch()
-  // resolves, the browser has lost the click's "user gesture" context and
-  // many popup blockers will silently kill a window.open() called after
-  // that point. Write a placeholder now, fill it in once the real content
-  // arrives.
+  // Open synchronously, before the await below -- popup blockers can kill
+  // a window.open() called after a fetch() resolves.
   const w = window.open("", "_blank");
   if (w) w.document.write("Generating...");
   try {
@@ -859,18 +889,11 @@ function openTestTab(testId, title) {
     const panel = document.createElement("div");
     panel.className = "test-panel";
     panel.id = "panel-" + filename;
-    panel.innerHTML = `
-      <div class="test-chrome">
-        <span class="fname">${esc(filename)}</span>
-      </div>
-      <iframe src="/test?load=${encodeURIComponent(filename)}"></iframe>`;
+    panel.innerHTML = `<iframe src="/test?load=${encodeURIComponent(filename)}"></iframe>`;
     document.getElementById("panels").appendChild(panel);
     const iframe = panel.querySelector("iframe");
-    // The docx export button lives inside the iframe's own export row
-    // (next to Perceptor's other export buttons) rather than in this
-    // outer chrome bar -- inject it once the editor has finished
-    // loading, since perceptor.py itself stays dependency-free and
-    // doesn't define this button.
+    // The docx export button lives inside the iframe's own export row --
+    // injected once the editor finishes loading, since perceptor.py stays dependency-free.
     iframe.addEventListener("load", () => {
       const idoc = iframe.contentDocument;
       const row = idoc && idoc.getElementById("exportRow");
@@ -888,12 +911,14 @@ function openTestTab(testId, title) {
         });
         row.appendChild(btn);
       }
-      // Lock icon on the tab, so a locked file is identifiable without
-      // opening it. Perceptor's own ?load= fetch is async and typically
-      // resolves after this iframe "load" event fires, so a one-shot
-      // check here would usually see the blank pre-load default card --
-      // retry briefly instead of assuming it's ready immediately.
+      // Perceptor's own ?load= fetch is async and typically resolves
+      // after this "load" event fires, so retry briefly rather than assume it's ready.
       pollForLockIcon(iframe, filename, 10);
+      // The epic key is a plain variable Perceptor sets synchronously at
+      // script top, so it's already there by the time "load" fires -- no retry needed.
+      if (iframe.contentWindow) {
+        iframe.contentWindow.starscopeJiraEpicKey = camp.jira_epic_key || "";
+      }
     });
   }
   switchTab(filename);
@@ -922,17 +947,14 @@ function closeTestTab(key) {
   else renderTabBar();
 }
 
-// ---- VCRM (Verification Cross-Reference Matrix) ----
 // A single reserved tab, regenerated in place rather than duplicated on
-// repeat clicks -- "__vcrm__" can't collide with a real .test filename,
-// which always ends in .test. Read-only: this tab shows a computed
-// snapshot, not something edited in the UI.
+// repeat clicks. Read-only: shows a computed snapshot, not edited in the UI.
 const VCRM_KEY = "__vcrm__";
 let currentVcrm = null;
 
 function vcrmCoveringStr(row) {
   if (!row.covering_tests.length) return "--";
-  return row.covering_tests.map(c => `${c.test_id} (${STATUS_LABELS[c.status] || c.status || "(none)"})`).join(", ");
+  return row.covering_tests.map(c => `${c.test_id} (${STATUS_LABELS[c.status] || c.status || "[None]"})`).join(", ");
 }
 
 async function generateVcrm() {
@@ -1020,7 +1042,7 @@ async function generateVcrm() {
 document.getElementById("genVcrmBtn").addEventListener("click", generateVcrm);
 
 bindMeta();
-camp.tests = [{seq: 1, test_id: "", title: "", author: "", status: ""}];
+camp.tests = [{seq: 1, test_id: "", title: "", author: "", requirements: "", status: ""}];
 renderRequirements();
 renderTests();
 renderAncillaryTests();
@@ -1030,13 +1052,13 @@ renderTabBar();
 </body>
 </html>
 """
+# Reuses perceptor's already-computed flag rather than checking again --
+# availability doesn't depend on which of the two apps is asking.
+_CAMPAIGN_HTML = _CAMPAIGN_HTML.replace(
+    "__JIRA_AVAILABLE__", "true" if perceptor.JIRA_AVAILABLE else "false")
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  HTTP server -- subclasses perceptor's handler so every existing
-#  /save, /export/*, /load, /list_files, /static/* route keeps working
-#  unchanged for test tabs; only the Campaign-specific routes are new here.
-# ══════════════════════════════════════════════════════════════════════
+# HTTP server -- subclasses perceptor's handler so its routes keep working for test tabs.
 
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -1053,9 +1075,7 @@ class _Handler(perceptor._Handler):
         if path == "/":
             self._send(200, "text/html", _CAMPAIGN_HTML.encode())
         elif path == "/test":
-            # Perceptor's own editor, reused unmodified inside a tab's
-            # iframe; ?load=<file> (read by perceptor.py's own script)
-            # opens a specific .test file.
+            # Perceptor's own editor, reused unmodified; ?load=<file> opens a specific .test file.
             self._send(200, "text/html", perceptor._INDEX_HTML.encode())
         else:
             # /load, /list_files, /static/*, and 404s all handled the
