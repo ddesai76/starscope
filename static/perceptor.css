@@ -1,7 +1,7 @@
 :root {
     --bg:#080908; --panel:#0c0e0c; --hi:#101310;
     --stroke:#243520; --stroke-hi:#405a3a;
-    --nw:#b8ffd0; --yl:#e8c000; --rd:#ff2800; --bl:#0077C8; --amb:#FFB300;
+    --nw:#b8ffd0; --yl:#e8c000; --rd:#ff2800; --bl:#0077C8; --amb:#FFB300; --nvg:#39ff14;
     --dim:#618a6b; --faint:#2e4432;
     --mono: 'B612 Mono', 'SF Mono', Menlo, Consolas, monospace;
   }
@@ -16,11 +16,11 @@
   .field label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 3px; }
   .editor-doc input, .editor-doc select, .editor-doc textarea {
     width: 100%; padding: 5px 7px; font-size: 13px; box-sizing: border-box;
-    background: var(--panel); border: 1px solid var(--stroke-hi); border-radius: 2px;
+    background: var(--panel); border: 1px solid var(--stroke-hi); border-radius: 1px;
     color: var(--nw); font-family: var(--mono);
   }
   input:focus, select:focus, textarea:focus { outline: none; border-color: var(--bl); }
-  .pt-card { border: 1px solid var(--stroke-hi); border-radius: 3px; padding: 10px; margin-bottom: 10px; }
+  .pt-card { border: 1px solid var(--stroke-hi); border-radius: 2px; padding: 10px; margin-bottom: 10px; }
   .lock-tag { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
   input:disabled, textarea:disabled, select:disabled {
     opacity: .55; cursor: not-allowed;
@@ -34,38 +34,62 @@
   .pt-sign label { display: block; font-size: 10px; color: var(--dim); margin-bottom: 2px; }
   .pt-sign .time-row { display: flex; gap: 4px; }
   .pt-main label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 3px; }
-  /* Flag: NVG amber instead of the usual blue, on the point number and
-     whichever sign-off fields are currently active -- independent of
-     locked, which is why this only ever touches .pt-sign (the fields
-     that stay editable on a locked point too). */
+  /* Flag: amber instead of blue, on the point number and whichever
+     sign-off fields are currently active -- independent of locked. */
   .pt-card.flagged .pt-head input.seq { color: var(--amb); }
   .pt-card.flagged .pt-sign input:focus, .pt-card.flagged .pt-sign select:focus,
   .pt-card.flagged .pt-main textarea:focus { border-color: var(--amb); }
   .pt-card.flagged .pt-sign .time-row .btn:hover,
   .pt-card.flagged .pt-sign .time-row .btn:focus { border-color: var(--amb); color: var(--amb); }
   .flag-btn.flagged { color: var(--amb); border-color: var(--amb); }
+  /* Amber on hover regardless of flagged state. .btn.flag-btn:hover is
+     deliberately more specific than .btn:hover, so it wins regardless of file order. */
+  .btn.flag-btn:hover, .btn.flag-btn:active { border-color: var(--amb); color: var(--amb); }
+  /* Capture and Measure both get green on hover -- both are "record a
+     reading" actions (a photo, a future equipment measurement). */
+  .pt-btns button[data-act="capture"]:hover, .pt-btns button[data-act="capture"]:active,
+  .pt-btns button[data-act="measure"]:hover, .pt-btns button[data-act="measure"]:active {
+    border-color: var(--nvg); color: var(--nvg);
+  }
   .pt-camera:empty { display: none; }
-  .cam-preview { width: 100%; max-width: 320px; border: 1px solid var(--stroke-hi); border-radius: 3px;
+  .cam-preview { width: 100%; max-width: 320px; border: 1px solid var(--stroke-hi); border-radius: 2px;
                  margin-top: 8px; display: block; }
   .pt-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .pt-images:empty { margin-top: 0; }
   .thumb-chip { font-size: 11px; color: var(--dim); background: var(--panel);
-                border: 1px solid var(--stroke-hi); border-radius: 2px; padding: 2px 6px;
+                border: 1px solid var(--stroke-hi); border-radius: 1px; padding: 2px 6px;
                 display: inline-flex; align-items: center; gap: 6px; }
+  .thumb-chip svg { display: block; width: 12px; height: 12px; fill: currentColor; flex: none; }
   .thumb-chip .btn.mini { padding: 0 4px; }
   .pt-cam-msg { font-size: 11px; color: var(--amb); margin-top: 4px; }
   .pt-cam-msg:empty { display: none; }
   .btn { background: var(--panel); border: 1px solid var(--stroke-hi); color: var(--nw);
-         font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 2px;
+         font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 1px;
          cursor: pointer; text-transform: uppercase; }
   .btn:hover { border-color: var(--bl); color: var(--bl); }
+  /* Every "x"-style delete/remove control gets red on hover, not the
+     app-wide default blue -- a delete action reads differently. */
+  .btn-x:hover, .btn-x:active { border-color: var(--rd); color: var(--rd); }
   .btn.mini { padding: 1px 6px; font-size: 12px; }
+  /* Sized to match the test point number field (~29px tall) -- same
+     vertical padding/icon size STARSCOPE uses, tighter horizontal padding since this cluster has up to 8 buttons. */
+  .btn.mini.btn-icon {
+    padding: 6px; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .btn-icon svg { display: block; width: 16px; height: 16px; fill: currentColor; }
+  /* "+ add X" reads fine as a bare plus since context (the table/list it
+     sits under) does the labeling; a hover title keeps the original wording. */
+  .btn-plus { font-size: 19px; line-height: 1; padding: 4px 12px; }
+  /* Green on hover, not the default blue -- .btn.btn-plus is deliberately
+     more specific than .btn:hover so it wins regardless of file order. */
+  .btn.btn-plus:hover, .btn.btn-plus:active { border-color: var(--nvg); color: var(--nvg); }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
   .btn:disabled:hover { border-color: var(--stroke-hi); color: var(--nw); }
-  /* NVG amber, matching the author's WINDBLADE cockpit palette. Generic
-     styling at rest; color only shows on hover/active, no constant glow.
-     The heading stays the normal section-header color -- only the
-     warning entries' own text is amber. */
+  /* Structural actions (up/down/delete) are grouped and pinned right,
+     separated from the functional buttons by roughly one button's width. */
+  .pt-head .pt-btns .pt-btn-gap { width: 28px; }
+  /* Amber, matching the WINDBLADE cockpit palette -- color only shows on
+     hover/active, no constant glow; only the warning text itself is amber. */
   #addWarningBtn:hover, #addWarningBtn:active { border-color: var(--amb); color: var(--amb); }
   #warningsList textarea { color: var(--amb); }
   .row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -74,22 +98,13 @@
   .nomtable { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 12px; }
   .nomtable td, .nomtable th { border: 1px solid var(--stroke); padding: 4px 7px; }
   .nomtable th.blank-th { border: none; background: transparent; }
-  /* A heading immediately followed by a table (Nomenclature, References)
-     doesn't need its own rule line -- the table's own border already
-     separates it from what's above. Headings before free text (Notes,
-     Warnings) keep the rule line. */
-  /* Headings that precede repeatable, self-bordered content (a table, or
-     a list of row-cards like Test Points/Notes/Warnings) don't need their
-     own rule line -- that content already provides visual separation.
-     Card metadata and Save/load/export keep theirs. */
+  /* A heading before a table or row-card list (Nomenclature, Test Points)
+     doesn't need its own rule line -- that content already separates it. */
   h2.no-rule { border-bottom: none; padding-bottom: 0; }
   .hint { color: var(--dim); font-size: 11px; margin-bottom: 10px; }
 
-/* ── Print / PDF card (export_print_html) ──────────────────────────────
-   A separate document from the editor above (opened in its own window),
-   scoped under .print-doc on <body> so it can share this file with the
-   editor CSS without any of the editor's rules (especially .meta, which
-   means something completely different here) leaking across. */
+/* Print / PDF card: a separate document, scoped under .print-doc so it
+   can share this file with the editor CSS without rules like .meta leaking across. */
 .print-doc { font-family: 'B612', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
         color: #1a1a1a; max-width: 1100px; margin: 1in auto; }
 .print-doc h1 { font-size: 30pt; font-weight: 600; color: #3c5a76; margin-bottom: 4px; }
