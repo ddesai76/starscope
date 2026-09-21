@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
+# build.sh -- builds the single "starscope" Linux binary (Perceptor +
+# STARSCOPE together) via PyInstaller.
 #
-# build.sh:       LINUX EXECUTABLE GENERATOR
-# AUTHOR:         DANIEL DESAI
-# UPDATED:        2026-09-21
-# VERSION:        0.1.2
-
-
-# Builds the single "starscope" Linux binary (PERCEPTOR + STARSCOPE) via PyInstaller.
 # Usage: ./build.sh
 #        ./build.sh --install-desktop path/to/icon.png
 # Output: dist/starscope
@@ -28,12 +23,19 @@ if [ "${1:-}" = "--install-desktop" ]; then
 fi
 
 missing=()
-for f in source/perceptor.py source/starscope.py source/jira_ticket.py static/perceptor.css static/starscope.css; do
+for f in source/perceptor.py source/starscope.py source/jira_ticket.py source/static/perceptor.css source/static/starscope.css; do
   [ -f "$f" ] || missing+=("$f")
 done
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "ERROR: missing required file(s) relative to build.sh:" >&2
   printf '  %s\n' "${missing[@]}" >&2
+  exit 1
+fi
+
+if { [ -e dist/starscope ] && [ ! -w dist/starscope ]; } || { [ -d dist ] && [ ! -w dist ]; }; then
+  echo "ERROR: dist/ (or dist/starscope) exists but isn't writable by $(whoami)." >&2
+  echo "Usually means an earlier build ran as a different user (e.g. root)." >&2
+  echo "Fix: sudo rm -rf dist   (then rebuild)" >&2
   exit 1
 fi
 
@@ -43,7 +45,7 @@ WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 pyinstaller --onefile --name starscope \
-  --add-data "$(pwd)/static:static" \
+  --add-data "$(pwd)/source/static:static" \
   --workpath "$WORKDIR" \
   --specpath "$WORKDIR" \
   source/starscope.py
