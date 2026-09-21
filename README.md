@@ -10,17 +10,26 @@ It uses the **Perceptor** (`perceptor.py`) module, a standalone test card creato
 
 ```bash
 # Run Starscope (test campaign designer) -> http://localhost:5791
-python3 starscope.py [--port <n>] [--no-browser]
+python3 source/starscope.py [--port <n>] [--no-browser]
 
 # Run Perceptor (test card editor) -> http://localhost:5790
-python3 perceptor.py [--port <n>] [--no-browser]
+python3 source/perceptor.py [--port <n>] [--no-browser]
+```
+
+### Build a Standalone Binary
+
+Bundles Starscope and Perceptor (Perceptor's editor is still reachable as a tab within it) into one executable, `starscope` — no Python install needed to run it.
+
+```bash
+./build.sh                              # -> dist/starscope
+./build.sh --install-desktop icon.png   # also adds a desktop/menu entry, pinnable to the dash/sidebar
 ```
 
 ### Dependencies
 * **Runtime:** Standard Python 3 library (`http.server`).
 * **Exports:** `python-docx` (`pip install python-docx`) for Word generation.
 * **Development/Testing:** `pytest` (`pip install pytest`).
-* **Jira integration:** Jira account and API key. Edit `jira_config_example.jsonc` and save as `jira_config.json`.
+* **Jira integration:** Jira account and API key. Edit `jira_config.example.json` and save as `jira_config.json`.
 
 ---
 
@@ -47,7 +56,7 @@ python3 perceptor.py [--port <n>] [--no-browser]
 * **Flag:** Highlights a test point in amber.
 * **Preview/Capture:** Captures single frames via `getUserMedia()` from connected webcams or UVC-compliant devices (e.g., thermal cameras). Saves images as local `<timestamp>.jpg` files attached as point thumbnails.
 * **Jira Ticket Creation:**
-  * Requires placing `jira_ticket.py` and `jira_config.json` in the working directory.
+  * `jira_ticket.py` is already bundled in `source/`, whether running from source or as the built binary. Add a filled-in `jira_config.json` in whatever directory you actually run the app from (not necessarily where the `.py` files live) to turn ticket creation on.
   * Displays a bug-creation button on Test Points marked `CAUTION` or `FAIL`.
   * Displays a task-creation button on Test Series rows in Starscope for planning work.
   * Auto-links created tickets to a campaign's Jira Epic key if specified.
@@ -70,14 +79,24 @@ python3 perceptor.py [--port <n>] [--no-browser]
 ## Codebase Architecture
 
 ```
-├── jira_config.json
-├── jira_ticket.py
-├── perceptor.py
-├── starscope.py
-├── static
-│   ├── perceptor.css
-│   └── starscope.css│
+├── source/
+│   ├── perceptor.py
+│   ├── starscope.py
+│   ├── jira_ticket.py
+│   └── static/
+│       ├── perceptor.css
+│       └── starscope.css
+├── build.sh
+├── jira_config.example.json
+├── README.md
+└── LICENSE
 ```
+
+`source/` holds everything the app needs to actually run — the three
+`.py` files and `static/` together, since `perceptor.py` looks for
+`static/` relative to its own location. `python3 source/starscope.py`
+and `./build.sh` both read from that same `source/` folder; `build.sh`
+bundles it all (including `jira_ticket.py`) into the single `dist/starscope`
+binary described above.
+
 ---
-
-
