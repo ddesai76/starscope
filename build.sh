@@ -1,10 +1,30 @@
 #!/usr/bin/env bash
-# build.sh -- builds the single "starscope" Linux binary (Perceptor +
-# STARSCOPE together) via PyInstaller.
+#
+# build.sh:       LINUX EXECUTABLE GENERATOR
+# AUTHOR:         DANIEL DESAI
+# UPDATED:        2026-09-21
+# VERSION:        0.1.2
+
+
+# Builds the single "starscope" Linux binary (PERCEPTOR + STARSCOPE) via PyInstaller.
+#
+# Directory structure (pre-build):
+# ├── assets
+# │   └── icon.png
+# ├── build.sh
+# └── source
+#   ├── jira_ticket.py
+#   ├── perceptor.py
+#   ├── starscope.py
+#   └── static
+#     ├── perceptor.css
+#     └── starscope.css
 #
 # Usage: ./build.sh
-#        ./build.sh --install-desktop path/to/icon.png
+#        ./build.sh --install-desktop                   (uses assets/icon.png)
+#        ./build.sh --install-desktop path/to/icon.png   (overrides it)
 # Output: dist/starscope
+# Place jira_config.json into dist/ to enable jira ticketing
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -15,9 +35,11 @@ fi
 
 ICON=""
 if [ "${1:-}" = "--install-desktop" ]; then
-  ICON="${2:-}"
-  if [ -z "$ICON" ] || [ ! -f "$ICON" ]; then
-    echo "Usage: $0 --install-desktop <path-to-icon-image>" >&2
+  ICON="${2:-assets/icon.png}"
+  if [ ! -f "$ICON" ]; then
+    echo "ERROR: icon not found at $ICON" >&2
+    echo "Usage: $0 --install-desktop [path-to-icon-image]" >&2
+    echo "Defaults to assets/icon.png if no path is given." >&2
     exit 1
   fi
 fi
